@@ -649,10 +649,9 @@ class SenkoCamppDiarizerOptimized:
                 audio = audio.mean(axis=1)
             sr = audio_sample_rate or SAMPLE_RATE
         else:
-            import soundfile
-            audio, sr = soundfile.read(audio_file, dtype='float32')
-            if audio.ndim > 1:
-                audio = audio.mean(axis=1)
+            from core.audio_decode import load_audio_ffmpeg_pipe
+            audio = load_audio_ffmpeg_pipe(audio_file, SAMPLE_RATE)
+            sr = SAMPLE_RATE
 
         if sr != SAMPLE_RATE:
             import librosa

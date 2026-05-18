@@ -1,11 +1,12 @@
 // Service Worker cho Sherpa Vietnamese ASR PWA
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v4';
 const CACHE_NAME = 'asr-vn-' + CACHE_VERSION;
 
 const STATIC_ASSETS = [
   '/static/index.html',
   '/static/offline.html',
-  '/static/css/style.css',
+  '/shared/css/style.css',
+  '/shared/js/about.js',
   '/static/js/app.js',
   '/static/js/websocket.js',
   '/static/js/upload.js',
@@ -56,7 +57,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Static assets: network-first, fallback cache (dam bao luon load code moi nhat)
-  if (url.pathname.startsWith('/static/')) {
+  if (url.pathname.startsWith('/static/') || url.pathname.startsWith('/shared/')) {
     event.respondWith(
       fetch(event.request).then((response) => {
         const clone = response.clone();

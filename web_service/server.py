@@ -155,6 +155,7 @@ def _clear_account_lockout(username: str):
 app = FastAPI(title="Sherpa Vietnamese ASR", docs_url=None, redoc_url=None, openapi_url=None)
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+SHARED_STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "shared_ui", "static")
 
 
 # === Middleware ===
@@ -291,7 +292,8 @@ async def download_cert():
     return {"error": "Certificate not found"}
 
 
-# Mount static AFTER specific routes
+# Mount shared/static AFTER specific routes
+app.mount("/shared", StaticFiles(directory=SHARED_STATIC_DIR), name="shared")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 

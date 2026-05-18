@@ -45,6 +45,10 @@ function selectFile(file) {
 
     // Xử lý kéo thả file JSON
     if (ext === 'json') {
+        if (window.authToken) {
+            showToast('Upload JSON chỉ dùng cho chế độ anonymous. Tài khoản đăng nhập dùng kết quả đã lưu trong quản lý tập tin.', 'error');
+            return;
+        }
         if (!uploadedFile) {
             showToast('Vui lòng kéo thả file âm thanh trước', 'error');
             return;
@@ -97,11 +101,16 @@ function selectFile(file) {
 
     // Enable buttons
     document.getElementById('btn-process').disabled = false;
-    document.getElementById('btn-load-json').disabled = false;
+    const loadJson = document.getElementById('btn-load-json');
+    if (loadJson) loadJson.disabled = !!window.authToken;
+    if (typeof syncJsonUploadVisibility === 'function') syncJsonUploadVisibility();
 
     // Reset state
     currentFileId = null;
     hideResults();
+    if (typeof loadLocalAudioPreview === 'function') {
+        loadLocalAudioPreview(file);
+    }
 }
 
 function clearFile() {
@@ -120,9 +129,11 @@ function clearFile() {
 
     document.getElementById('btn-process').disabled = true;
     document.getElementById('btn-cancel').style.display = 'none';
-    document.getElementById('btn-load-json').disabled = true;
+    const loadJson = document.getElementById('btn-load-json');
+    if (loadJson) loadJson.disabled = true;
     document.getElementById('btn-save-json').disabled = true;
     document.getElementById('btn-copy').disabled = true;
+    if (typeof syncJsonUploadVisibility === 'function') syncJsonUploadVisibility();
 
     hideResults();
     hidePlayer();

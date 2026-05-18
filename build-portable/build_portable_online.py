@@ -6,7 +6,10 @@ Dua tren build_portable.py nhung them web_service/ va loai tru streaming model.
 Usage: python build-portable/build_portable_online.py
 """
 import io
+import hashlib
+import json
 import os
+import re
 import sys
 import shutil
 import stat
@@ -243,9 +246,23 @@ def copy_source_files_online():
         cfg.read(config_dst, encoding="utf-8")
         if cfg.has_section("ServerSettings"):
             cfg.set("ServerSettings", "host", "0.0.0.0")
+        if not cfg.has_section("OfflinePWA"):
+            cfg.add_section("OfflinePWA")
+        offline_defaults = {
+            "enabled": "true",
+            "port": "8444",
+            "model_source": "bundled_server",
+            "model_proxy_enabled": "false",
+            "cache_version": "1",
+            "max_model_download_mb": "8192",
+        }
+        for key, value in offline_defaults.items():
+            if not cfg.has_option("OfflinePWA", key):
+                cfg.set("OfflinePWA", key, value)
+        if cfg.has_section("ServerSettings"):
             with open(config_dst, "w", encoding="utf-8") as f:
                 cfg.write(f)
-            print("  [OK] config.ini: host set to 0.0.0.0")
+            print("  [OK] config.ini: host set to 0.0.0.0, OfflinePWA defaults added")
 
     # Copy core/ module
     core_src = PROJECT_ROOT / "core"
@@ -268,6 +285,32 @@ def copy_source_files_online():
     (ws_dst / "data" / "logs").mkdir(parents=True, exist_ok=True)
     (ws_dst / "certs").mkdir(parents=True, exist_ok=True)
     print("  [OK] web_service/ copied")
+
+    # Copy offline_pwa/ module and static shell
+    offline_src = PROJECT_ROOT / "offline_pwa"
+    offline_dst = DIST_DIR_ONLINE / "offline_pwa"
+    if offline_src.exists():
+        if offline_dst.exists():
+            shutil.rmtree(offline_dst)
+        shutil.copytree(offline_src, offline_dst, ignore=shutil.ignore_patterns(
+            "__pycache__", "*.pyc"
+        ))
+        print("  [OK] offline_pwa/ copied")
+    else:
+        print("  [WARN] offline_pwa/ not found")
+
+    # Copy shared UI assets used by both the server PWA and offline PWA.
+    shared_src = PROJECT_ROOT / "shared_ui"
+    shared_dst = DIST_DIR_ONLINE / "shared_ui"
+    if shared_src.exists():
+        if shared_dst.exists():
+            shutil.rmtree(shared_dst)
+        shutil.copytree(shared_src, shared_dst, ignore=shutil.ignore_patterns(
+            "__pycache__", "*.pyc"
+        ))
+        print("  [OK] shared_ui/ copied")
+    else:
+        print("  [WARN] shared_ui/ not found")
 
     # Copy vocabulary/
     vocab_src = PROJECT_ROOT / "vocabulary"
@@ -419,6 +462,117 @@ def copy_models_online():
     print(f"[OK] Models copied: {count} files")
 
 
+def validate_offline_pwa_model_bundle():
+    """Fail the server build if the PWA manifest references missing local models."""
+    manifest_path = DIST_DIR_ONLINE / "offline_pwa" / "model_manifest.json"
+    if not manifest_path.exists():
+        raise RuntimeError("offline_pwa/model_manifest.json missing from portable build")
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    models_root = (DIST_DIR_ONLINE / "models").resolve()
+    errors = []
+    checked = 0
+    for pack in manifest.get("packs", []):
+        if pack.get("required") is False or pack.get("optional") is True:
+            continue
+        for item in pack.get("files", []):
+            checked += 1
+            rel_path = item.get("local_path") or item.get("target_path")
+            file_id = item.get("id", "<unknown>")
+            if not rel_path:
+                errors.append(f"{file_id}: missing local_path")
+                continue
+            candidate = (DIST_DIR_ONLINE / rel_path).resolve()
+            try:
+                candidate.relative_to(models_root)
+            except ValueError:
+                errors.append(f"{file_id}: local_path outside models/: {rel_path}")
+                continue
+            if not candidate.is_file():
+                errors.append(f"{file_id}: missing bundled file {rel_path}")
+                continue
+            expected = item.get("bytes")
+            size = candidate.stat().st_size
+            if expected and size != expected:
+                errors.append(f"{file_id}: size mismatch {size} != {expected} ({rel_path})")
+            expected_sha = str(item.get("sha256") or "").strip().lower()
+            if not re.fullmatch(r"[a-f0-9]{64}", expected_sha):
+                errors.append(f"{file_id}: missing sha256 in manifest")
+                continue
+            sha = hashlib.sha256()
+            with open(candidate, "rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    sha.update(chunk)
+            actual_sha = sha.hexdigest()
+            if actual_sha != expected_sha:
+                errors.append(f"{file_id}: sha256 mismatch {actual_sha} != {expected_sha} ({rel_path})")
+
+    if errors:
+        print("[ERR] Offline PWA server bundle is incomplete:")
+        for error in errors:
+            print(f"  - {error}")
+        raise RuntimeError("Offline PWA model bundle validation failed")
+    print(f"[OK] Offline PWA model bundle validated: {checked} manifest file(s)")
+
+
+def _js_string_array_values(text: str, const_name: str) -> list[str]:
+    match = re.search(
+        rf"const\s+{re.escape(const_name)}\s*=\s*(?:Object\.freeze\()?\[([\s\S]*?)\]\)?\s*;",
+        text,
+    )
+    if not match:
+        return []
+    return re.findall(r"""["']([^"']+)["']""", match.group(1))
+
+
+def _offline_pwa_url_to_file(url: str) -> Path | None:
+    """Map same-origin PWA runtime URLs to files inside the portable bundle."""
+    if url in ("", "/"):
+        return DIST_DIR_ONLINE / "offline_pwa" / "static" / "index.html"
+    if url == "/api/model-manifest":
+        return DIST_DIR_ONLINE / "offline_pwa" / "model_manifest.json"
+    if url.startswith("/api/"):
+        return None
+    if url.startswith("/shared/"):
+        return DIST_DIR_ONLINE / "shared_ui" / "static" / url[len("/shared/"):]
+    return DIST_DIR_ONLINE / "offline_pwa" / "static" / url.lstrip("/")
+
+
+def validate_offline_pwa_static_bundle():
+    """Fail if the server portable build misses any PWA runtime/cache asset."""
+    app_js = DIST_DIR_ONLINE / "offline_pwa" / "static" / "js" / "app.js"
+    sw_js = DIST_DIR_ONLINE / "offline_pwa" / "static" / "sw.js"
+    if not app_js.exists():
+        raise RuntimeError("offline_pwa/static/js/app.js missing from portable build")
+    if not sw_js.exists():
+        raise RuntimeError("offline_pwa/static/sw.js missing from portable build")
+
+    app_text = app_js.read_text(encoding="utf-8")
+    sw_text = sw_js.read_text(encoding="utf-8")
+    urls = set(_js_string_array_values(app_text, "OFFLINE_RUNTIME_ASSET_URLS"))
+    urls.update(_js_string_array_values(sw_text, "CORE_SHELL"))
+    urls.update(_js_string_array_values(sw_text, "APP_SHELL"))
+
+    missing = []
+    checked = 0
+    for url in sorted(urls):
+        if not url.startswith("/"):
+            continue
+        path = _offline_pwa_url_to_file(url)
+        if path is None:
+            continue
+        checked += 1
+        if not path.is_file():
+            missing.append(f"{url} -> {path.relative_to(DIST_DIR_ONLINE)}")
+
+    if missing:
+        print("[ERR] Offline PWA static bundle is incomplete:")
+        for item in missing:
+            print(f"  - {item}")
+        raise RuntimeError("Offline PWA static bundle validation failed")
+    print(f"[OK] Offline PWA static bundle validated: {checked} runtime asset(s)")
+
+
 def create_launcher_online():
     """Tao launcher batch cho ban services"""
     print("[LNCH] Creating service launcher...")
@@ -448,9 +602,14 @@ def create_launcher_online():
         'echo ===================================\n'
         'echo.\n'
         '\n'
-        'rem Doc port tu config.ini\n'
+        'rem Doc host/port dung section tu config.ini\n'
+        'set "HOST=0.0.0.0"\n'
         'set "PORT=8443"\n'
-        'for /f "tokens=2 delims== " %%a in (\'findstr /i "^port" "%BASE_DIR%config.ini" 2^>nul\') do set "PORT=%%a"\n'
+        'set "HTTP_MODE=0"\n'
+        'set "PWA_ENABLED=1"\n'
+        'set "PWA_PORT=8444"\n'
+        'for /f "tokens=1,* delims==" %%A in (\'"%PYTHON_EXE%" -c "import configparser, os; c=configparser.ConfigParser(); c.read(os.path.join(os.environ[\'BASE_DIR\'], \'config.ini\'), encoding=\'utf-8\'); s=c[\'ServerSettings\'] if c.has_section(\'ServerSettings\') else {}; p=c[\'OfflinePWA\'] if c.has_section(\'OfflinePWA\') else {}; v=p.get(\'enabled\',\'true\').strip().lower(); print(\'HOST=\'+s.get(\'host\',\'0.0.0.0\')); print(\'PORT=\'+s.get(\'port\',\'8443\')); print(\'HTTP_MODE=\'+s.get(\'http_mode\',\'0\')); print(\'PWA_ENABLED=\'+(\'1\' if v in (\'1\',\'true\',\'yes\',\'on\') else \'0\')); print(\'PWA_PORT=\'+p.get(\'port\',\'8444\'))" 2^>nul\') do set "%%A=%%B"\n'
+        'if "%HTTP_MODE%"=="1" (set "PROTO=http") else (set "PROTO=https")\n'
         '\n'
         'if "%1"=="--no-gui" goto :headless\n'
         '\n'
@@ -469,8 +628,23 @@ def create_launcher_online():
         ':headless\n'
         'echo Server dang chay. Truy cap:\n'
         'echo.\n'
-        'echo   https://localhost:%PORT%\n'
-        'echo   https://[IP-may-nay]:%PORT%\n'
+        'if "%HOST%"=="0.0.0.0" (\n'
+        '    echo   %PROTO%://localhost:%PORT%\n'
+        '    echo   %PROTO%://[IP-may-nay]:%PORT%\n'
+        '    if "%PWA_ENABLED%"=="1" (\n'
+        '        echo.\n'
+        '        echo PWA offline:\n'
+        '        echo   %PROTO%://localhost:%PWA_PORT%\n'
+        '        echo   %PROTO%://[IP-may-nay]:%PWA_PORT%\n'
+        '    )\n'
+        ') else (\n'
+        '    echo   %PROTO%://%HOST%:%PORT%\n'
+        '    if "%PWA_ENABLED%"=="1" (\n'
+        '        echo.\n'
+        '        echo PWA offline:\n'
+        '        echo   %PROTO%://%HOST%:%PWA_PORT%\n'
+        '    )\n'
+        ')\n'
         'echo.\n'
         'echo Dang nhap admin de quan tri he thong qua web.\n'
         'echo Nhan Ctrl+C de dung server.\n'
@@ -512,6 +686,8 @@ Yeu cau:
 
 Sau khi chay:
 - Truy cap https://IP:8443 tren browser
+- PWA offline duoc bat kem server neu [OfflinePWA] enabled=true, mac dinh https://IP:8444
+- Cho may dien thoai truy cap URL PWA offline lan dau de cai app va tai model tu server
 - Admin mac dinh: admin / admin (doi ngay sau khi dang nhap)
 - Dang nhap admin -> nut "Quan tri" hien ra -> quan ly phien, queue, user qua web
 - Browser se canh bao "Not Secure" vi self-signed cert, bam "Advanced" -> "Proceed"
@@ -603,6 +779,9 @@ def main():
             opt_file.unlink()
             print(f"  [DEL] {opt_file.relative_to(DIST_DIR_ONLINE)} (ORT cache, auto-generated on target)")
 
+        validate_offline_pwa_model_bundle()
+        validate_offline_pwa_static_bundle()
+
         # Post-build validation
         print()
         print("[CHECK] Validating build...")
@@ -633,8 +812,51 @@ def main():
             "web_service/audio_quality.py",
             "web_service/static/index.html",
             "web_service/static/js/app.js",
-            "web_service/static/css/style.css",
             "web_service/static/manifest.json",
+            "offline_pwa/__init__.py",
+            "offline_pwa/server.py",
+            "offline_pwa/config.py",
+            "offline_pwa/model_manifest.json",
+            "offline_pwa/static/index.html",
+            "offline_pwa/static/hotword.txt",
+            "offline_pwa/static/js/app.js",
+            "offline_pwa/static/js/asr-worker.js",
+            "offline_pwa/static/js/ffmpeg-decode-worker.js",
+            "offline_pwa/static/js/pure-ort-asr-worker.js",
+            "offline_pwa/static/vendor/ffmpeg/ffmpeg/classes.js",
+            "offline_pwa/static/vendor/ffmpeg/ffmpeg/const.js",
+            "offline_pwa/static/vendor/ffmpeg/ffmpeg/errors.js",
+            "offline_pwa/static/vendor/ffmpeg/ffmpeg/index.js",
+            "offline_pwa/static/vendor/ffmpeg/ffmpeg/types.js",
+            "offline_pwa/static/vendor/ffmpeg/ffmpeg/utils.js",
+            "offline_pwa/static/vendor/ffmpeg/ffmpeg/worker.js",
+            "offline_pwa/static/vendor/ffmpeg/core/ffmpeg-core.js",
+            "offline_pwa/static/vendor/ffmpeg/core/ffmpeg-core.wasm",
+            "offline_pwa/static/vendor/onnxruntime-web/ort.wasm.min.js",
+            "offline_pwa/static/vendor/onnxruntime-web/ort.webgpu.min.js",
+            "offline_pwa/static/vendor/onnxruntime-web/ort-wasm-simd-threaded.wasm",
+            "offline_pwa/static/vendor/onnxruntime-web/ort-wasm-simd-threaded.mjs",
+            "offline_pwa/static/vendor/onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm",
+            "offline_pwa/static/vendor/onnxruntime-web/ort-wasm-simd-threaded.jsep.mjs",
+            "offline_pwa/static/vendor/onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm",
+            "offline_pwa/static/vendor/onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs",
+            "offline_pwa/static/vendor/longform-clustering/longform-clustering.js",
+            "offline_pwa/static/vendor/mpg123-decoder/mpg123-decoder.min.js",
+            "offline_pwa/static/vendor/zstd-wasm/zstd-wrapper.js",
+            "offline_pwa/static/vendor/zstd-wasm/zstd.js",
+            "offline_pwa/static/vendor/zstd-wasm/zstd.wasm",
+            "offline_pwa/static/vendor/sherpa-onnx-wasm/sherpa-onnx-asr.js",
+            "offline_pwa/static/vendor/sherpa-onnx-wasm/sherpa-onnx-wasm-main-vad-asr.js",
+            "offline_pwa/static/vendor/sherpa-onnx-wasm/sherpa-onnx-wasm-main-vad-asr.wasm",
+            "offline_pwa/static/css/app.css",
+            "offline_pwa/static/icons/icon-192.png",
+            "offline_pwa/static/icons/icon-512.png",
+            "offline_pwa/static/calibration/1hour_qh_10min.mp3",
+            "offline_pwa/static/manifest.json",
+            "offline_pwa/static/sw.js",
+            "shared_ui/static/css/style.css",
+            "shared_ui/static/js/about.js",
+            "shared_ui/static/js/status.js",
             "sherpa-vietnamese-asr-service.bat",
         ]
         # Check required packages

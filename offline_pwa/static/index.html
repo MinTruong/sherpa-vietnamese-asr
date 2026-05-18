@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sherpa Vietnamese ASR</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/shared/css/style.css">
+  <link rel="stylesheet" href="/css/app.css">
+  <meta name="theme-color" content="#2b2b2b">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+</head>
+<body>
+  <header class="topbar" id="app-header">
+    <div class="header-title">
+      Sherpa Vietnamese ASR
+      <button id="btn-about" class="btn-about" type="button" title="Thông tin ứng dụng">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+      </button>
+    </div>
+    <div class="header-right app-only">
+      <button id="btn-recalibration" class="btn btn-sm btn-secondary" type="button">Re-Calibration</button>
+      <button id="btn-offline-files" class="btn btn-sm" type="button">Quản lý tập tin</button>
+    </div>
+  </header>
+
+  <main class="layout" id="app-main">
+    <div class="panel install-panel" id="install-panel">
+      <div class="panel-header">
+        <span class="panel-toggle">▼</span>
+        Cài đặt ứng dụng
+      </div>
+      <div class="panel-body">
+        <div class="install-groups">
+          <div class="install-group">
+            <div class="install-group-label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+              </svg>
+              Ứng dụng xử lý offline
+            </div>
+            <div class="install-steps">
+              <div class="install-step" id="install-step-cert">
+                <button id="btn-install-cert" class="btn btn-sm btn-install-cert" type="button">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                  </svg>
+                  B1: Tải và cài cert SSL
+                </button>
+                <div id="cert-guide" class="install-guide" style="display:none"></div>
+              </div>
+              <div class="install-step" id="install-step-app">
+                <button id="btn-install-app" class="btn btn-sm btn-install" type="button">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  B2: Cài đặt ứng dụng
+                </button>
+                <div id="install-status-msg" class="install-status-msg" style="display:none"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <template id="advanced-settings-template">
+          <details id="advanced-settings" class="utility-details advanced-settings">
+          <summary>
+            <span>Cấu hình nâng cao</span>
+            <small>Hotwords và import/export cấu hình.</small>
+          </summary>
+          <div class="actions config-actions">
+            <button id="btn-export-config" type="button">Export config</button>
+            <button id="btn-import-config" type="button">Import config</button>
+            <button id="btn-reset-config" type="button">Reset config</button>
+            <input id="config-input" type="file" accept=".json,application/json" hidden>
+          </div>
+          </details>
+        </template>
+      </div>
+    </div>
+
+    <section class="panel offline-bootstrap-panel" id="offline-bootstrap-panel">
+      <div class="panel-header">
+        <span class="panel-toggle">▼</span>
+        Chuẩn bị dữ liệu offline
+      </div>
+      <div class="panel-body">
+        <div class="bootstrap-status-line">
+          <strong id="offline-bootstrap-status">Đang kiểm tra</strong>
+        </div>
+        <p id="offline-bootstrap-message">Vui lòng giữ kết nối trong lần đầu tải dữ liệu offline.</p>
+        <div class="progress-bar bootstrap-progress">
+          <div id="offline-bootstrap-progress-bar" class="progress-fill"></div>
+        </div>
+        <div class="bootstrap-actions calibration-actions">
+          <button id="btn-skip-calibration" class="btn btn-secondary" type="button">
+            Bỏ qua, dùng cấu hình mặc định
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div class="technical-internals" hidden aria-hidden="true">
+      <div id="runtime-status">Đang khởi động</div>
+      <input id="cpu-threads" type="hidden" value="4">
+      <span id="cpu-threads-value">4</span>
+      <input id="rms-normalize" type="checkbox">
+      <input id="overlap-separation" type="checkbox">
+      <input id="save-ram" type="checkbox" checked>
+    </div>
+
+    <section class="technical-internals model-details-panel" hidden>
+      <details id="model-details">
+        <summary>
+          <span>Model pack details</span>
+          <small id="model-details-summary">Open only for troubleshooting.</small>
+        </summary>
+        <div id="model-packs" class="pack-list"></div>
+      </details>
+    </section>
+
+
+
+    <details class="panel config-panel app-only" id="config-panel" open>
+      <summary class="panel-header">
+        <span class="panel-toggle">▼</span>
+        Cấu hình
+      </summary>
+      <div class="panel-body">
+      <div id="processing-settings" class="config-shell">
+      <div class="config-grid">
+        <div class="config-row">
+          <label for="asr-model">Model ASR:</label>
+          <select id="asr-model">
+            <option value="zipformer-30m-rnnt-6000h">hynt/Zipformer-30M (nhanh)</option>
+            <option value="sherpa-onnx-zipformer-vi-2025-04-20" selected>Zipformer-Vi 2025 (68M)</option>
+            <option value="rover-voting">ROVER (chậm, chính xác)</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <label for="ui-text-scale">Cỡ chữ:</label>
+          <input id="ui-text-scale" type="range" min="90" max="130" step="5" value="110">
+          <span id="ui-text-scale-value">Lớn (110%)</span>
+        </div>
+        <div class="config-row">
+          <label for="punctuation-level">Thêm dấu:</label>
+          <input id="punctuation-level" type="range" min="1" max="10" value="6">
+          <span id="punctuation-level-value">Vừa (6)</span>
+        </div>
+        <div class="config-row">
+          <label for="case-level">Viết hoa:</label>
+          <input id="case-level" type="range" min="1" max="10" value="6">
+          <span id="case-level-value">Vừa (6)</span>
+        </div>
+        <div class="config-row full-width">
+          <label>
+            <input id="bypass-vad" type="checkbox">
+            Audio cực kỳ khó nghe (có thể làm giảm độ chính xác nếu Audio tốt)
+          </label>
+        </div>
+        <div class="config-row full-width">
+          <label>
+            <input id="speaker-diarization" type="checkbox" checked>
+            Phân tách người nói (nếu biết và chỉ định trước số người nói, kết quả sẽ chính xác hơn)
+          </label>
+        </div>
+        <div id="diarization-options">
+          <div class="config-row">
+            <label for="speaker-count">Số người nói:</label>
+            <select id="speaker-count" disabled>
+              <option value="0">Không rõ (tự động)</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+              <option value="9">9</option>
+              <option value="10">10</option>
+              <option value="11">11</option>
+              <option value="12">12</option>
+              <option value="13">13</option>
+              <option value="14">14</option>
+              <option value="15">15</option>
+              <option value="16">16</option>
+              <option value="17">17</option>
+              <option value="18">18</option>
+              <option value="19">19</option>
+              <option value="20">20</option>
+            </select>
+          </div>
+          <div class="config-row">
+            <label for="speaker-model">Model người nói:</label>
+            <select id="speaker-model" disabled>
+              <option value="senko_campp_optimized">Senko CAM++ (Optimized - Nhanh)</option>
+              <option value="pyannote_community1_vbx">Pyannote Community-1 (ResNet34-LM + PLDA + VBx - Chậm, chính xác)</option>
+            </select>
+          </div>
+          <div class="config-row hotword-manager-row">
+            <label>Hotword:</label>
+            <button id="btn-hotword-manager" class="btn btn-secondary" type="button">Quản lý hotword.txt</button>
+          </div>
+        </div>
+      </div>
+      </div>
+      <div id="advanced-settings-mount" class="config-advanced-mount"></div>
+      </div>
+    </details>
+    <section class="panel file-panel app-only">
+      <div class="panel-body">
+      <div class="drop-zone" id="drop-zone">
+        <input id="file-input" type="file" accept="audio/*,video/*,.mp3,.wav,.m4a,.flac,.aac,.ogg,.opus,.mp4,.mov,.webm">
+        <div class="drop-zone-text">
+          <div class="drop-zone-left">
+            <p>Bấm để chọn file âm thanh (tối đa 500MB)</p>
+            <p class="drop-hint">mp3, wav, m4a, flac, aac, ogg, opus, mp4, mov, webm</p>
+            <p class="drop-hint">Kết quả chính xác nhất với tập tin ghi âm trực tiếp từ hệ thống microphone cổ ngỗng.</p>
+            <p class="drop-hint">Nếu ghi âm trực tiếp tại phòng họp thì ưu tiên sử dụng thiết bị chuyên ghi âm như Sony và để sát người chủ trì.</p>
+          </div>
+          <span class="drop-icon" aria-hidden="true">📁</span>
+        </div>
+        <div id="file-selected" class="file-selected" style="display:none">
+          <span class="file-icon" aria-hidden="true">📄</span>
+          <span id="file-name"></span>
+          <span id="file-size"></span>
+          <button id="btn-clear-file" class="btn-clear" type="button" title="Xóa file">&times;</button>
+        </div>
+      </div>
+      <div class="action-buttons">
+        <button id="btn-process" class="btn btn-primary" disabled>Xử lý</button>
+        <button id="btn-cancel" class="btn btn-danger" type="button" style="display:none">Kết thúc</button>
+        <button id="btn-save-json" class="btn btn-secondary" type="button" disabled>⇩ Tải JSON</button>
+        <button id="btn-copy-text" class="btn btn-secondary" type="button" disabled>Sao chép văn bản</button>
+      </div>
+      <div id="process-progress" class="progress-container" style="display:none">
+        <div class="progress-header">
+          <span id="pipeline-stage">Đang chờ...</span>
+          <span id="pipeline-progress-text">0%</span>
+        </div>
+        <div class="progress-bar"><div id="pipeline-progress-bar" class="progress-fill"></div></div>
+      </div>
+      <div class="technical-internals" hidden aria-hidden="true">
+        <input id="editor-audio-input" type="file" accept="audio/*,video/*,.mp3,.wav,.m4a,.flac,.aac,.ogg,.opus,.mp4,.mov,.webm">
+        <audio id="editor-audio" preload="metadata"></audio>
+        <button id="btn-attach-audio" type="button">Gắn audio</button>
+        <button id="btn-rerun-diarization" type="button" disabled>Chạy lại phân tách</button>
+        <button id="btn-export-transcript" type="button" disabled>Xuất transcript</button>
+      </div>
+      <pre id="pipeline-log" class="log" hidden></pre>
+      </div>
+    </section>
+
+    <section class="panel result-panel" id="result-panel" style="display:none">
+      <div id="quality-strip" class="quality-strip" style="display:none"></div>
+      <div class="result-header">
+        <div class="search-widget" id="search-widget">
+          <input type="text" id="search-input" placeholder="Tìm kiếm..." autocomplete="off">
+          <span id="search-count"></span>
+          <button id="btn-search-prev" class="search-btn" type="button" title="Trước">▲</button>
+          <button id="btn-search-next" class="search-btn" type="button" title="Sau">▼</button>
+          <button id="btn-search-clear" class="search-btn" type="button" title="Đóng">&times;</button>
+        </div>
+      </div>
+      <div id="result-content" class="result-content"></div>
+      <div id="result-summary" class="result-content" style="display:none"></div>
+      <div id="result-timing" class="result-timing"></div>
+    </section>
+
+    <!-- Audio Player -->
+    <div id="player-panel" class="player-panel" style="display:none">
+        <button id="btn-play" class="btn-play" type="button">
+            <svg class="play-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="6,3 20,12 6,21"/></svg>
+            <svg class="pause-icon" style="display:none" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="7" y1="4" x2="7" y2="20"/><line x1="17" y1="4" x2="17" y2="20"/></svg>
+        </button>
+        <input type="range" id="player-seek" class="player-seek" min="0" max="100" value="0" step="0.1">
+        <span id="player-time">00:00 / 00:00</span>
+    </div>
+
+    <!-- Scroll to top -->
+    <button id="btn-scroll-top" class="btn-scroll-top" type="button" title="Lên đầu trang">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18,15 12,9 6,15"/></svg>
+    </button>
+
+    <section class="technical-internals utility-panel" hidden>
+      <details id="diagnostics-details" class="utility-details">
+        <summary>
+          <span>Diagnostics</span>
+          <small>Open only when troubleshooting browser/offline support.</small>
+        </summary>
+        <dl class="stats diagnostics-stats">
+          <div><dt>Secure context</dt><dd id="secure-context">-</dd></div>
+          <div><dt>Cross-origin isolated</dt><dd id="isolated">-</dd></div>
+          <div><dt>ONNX Runtime</dt><dd id="onnx-runtime">-</dd></div>
+          <div><dt>ASR Runtime</dt><dd id="asr-runtime">idle</dd></div>
+          <div><dt>Storage persistence</dt><dd id="storage-persistence">-</dd></div>
+          <div><dt>Storage quota</dt><dd id="storage-quota">-</dd></div>
+          <div><dt>Storage used</dt><dd id="storage-used">-</dd></div>
+        </dl>
+      </details>
+    </section>
+  </main>
+
+  <div id="meetings-panel" class="meetings-panel" style="display:none">
+    <div class="meetings-header">
+      <h3>Quản lý tập tin</h3>
+      <div class="meetings-header-right">
+        <input type="text" id="meetings-search" placeholder="Tìm kiếm..." autocomplete="off">
+        <button id="btn-close-meetings" class="modal-close" type="button">&times;</button>
+      </div>
+    </div>
+    <div id="meetings-toolbar" class="meetings-toolbar" style="display:none">
+      <label class="mg-select-label">
+        <input type="checkbox" id="mg-select-all"> Chọn tất cả
+      </label>
+      <button id="btn-delete-selected-meetings" class="btn btn-sm btn-danger" type="button">Xóa đã chọn</button>
+    </div>
+    <div id="meetings-list" class="meetings-list"></div>
+  </div>
+
+  <!-- Split Speaker Modal -->
+  <div id="split-speaker-modal" class="modal" style="display:none">
+      <div class="modal-content modal-sm">
+          <div class="modal-header">
+              <h3>Tách người nói</h3>
+              <button class="modal-close" id="btn-close-split-modal" type="button">&times;</button>
+          </div>
+          <div class="modal-body">
+              <div class="form-group">
+                  <label>Người nói hiện tại: <strong id="split-current-speaker"></strong></label>
+              </div>
+              <div class="form-group">
+                  <label>Chọn người nói mới:</label>
+                  <select id="split-speaker-select">
+                      <option value="">-- Chọn từ danh sách --</option>
+                  </select>
+              </div>
+              <div class="form-group">
+                  <label>Hoặc nhập tên mới:</label>
+                  <input type="text" id="split-speaker-input" placeholder="Nhập tên người nói...">
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                  <label style="margin-bottom:8px">Phạm vi:</label>
+                  <div class="radio-group">
+                      <label class="radio-label">
+                          <input type="radio" name="split-scope" value="to_end" checked>
+                          <span>Từ câu này đến hết đoạn</span>
+                      </label>
+                      <label class="radio-label">
+                          <input type="radio" name="split-scope" value="single">
+                          <span>Chỉ câu này</span>
+                      </label>
+                  </div>
+              </div>
+          </div>
+          <div class="modal-footer">
+              <button class="btn btn-primary" id="btn-confirm-split" type="button">Tách</button>
+              <button class="btn" id="btn-cancel-split" type="button">Hủy</button>
+          </div>
+      </div>
+  </div>
+
+  <!-- Context Menu -->
+  <div id="context-menu" class="context-menu" style="display:none">
+      <div class="ctx-item" id="ctx-split-speaker">Tách người nói từ câu này</div>
+      <div class="ctx-item" id="ctx-merge-up">Gộp với người nói phía trước</div>
+      <div class="ctx-item" id="ctx-merge-down">Gộp với người nói phía sau</div>
+      <hr class="ctx-divider">
+      <div class="ctx-item" id="ctx-rename-speaker">Đổi tên người nói</div>
+      <hr class="ctx-divider">
+      <div class="ctx-item" id="ctx-copy">Sao chép</div>
+  </div>
+
+  <!-- Speaker Rename Modal -->
+  <div id="rename-modal" class="modal" style="display:none">
+      <div class="modal-content modal-sm">
+          <div class="modal-header">
+              <h3>Đổi tên người nói</h3>
+              <button class="modal-close" id="btn-close-rename-modal" type="button">&times;</button>
+          </div>
+          <div class="modal-body">
+              <div class="form-group">
+                  <label>Người nói hiện tại: <strong id="rename-current"></strong></label>
+              </div>
+              <div class="form-group">
+                  <label>Tên mới:</label>
+                  <input type="text" id="rename-input">
+              </div>
+              <div class="form-group">
+                  <label>Chọn từ danh sách:</label>
+                  <select id="rename-select">
+                      <option value="">-- Chọn --</option>
+                  </select>
+              </div>
+              <div class="form-group">
+                  <label>Màu tên:</label>
+                  <div id="rename-colors" class="color-picker-row"></div>
+              </div>
+          </div>
+          <div class="modal-footer">
+              <button class="btn btn-primary" id="btn-rename-all" type="button">Sửa tất cả</button>
+              <button class="btn btn-success" id="btn-rename-single" type="button">Sửa tên này</button>
+              <button class="btn" id="btn-cancel-rename" type="button">Hủy</button>
+          </div>
+      </div>
+  </div>
+
+  <!-- Meeting Name Modal -->
+  <div id="meeting-name-modal" class="modal" style="display:none">
+      <div class="modal-content modal-sm">
+          <div class="modal-header">
+              <h3>Tên cuộc họp</h3>
+              <button class="modal-close" id="btn-close-meeting-modal" type="button">&times;</button>
+          </div>
+          <div class="modal-body">
+              <div class="form-group">
+                  <label>Tên cuộc họp (để trống sẽ dùng tên file):</label>
+                  <input type="text" id="meeting-name-input" placeholder="Nhập tên cuộc họp...">
+              </div>
+          </div>
+          <div class="modal-footer">
+              <button class="btn btn-primary" id="btn-confirm-meeting" type="button">Xử lý</button>
+              <button class="btn" id="btn-cancel-meeting" type="button">Hủy</button>
+          </div>
+      </div>
+  </div>
+
+  <dialog id="speaker-dialog" class="speaker-dialog">
+    <div class="speaker-dialog-body">
+      <h2 id="speaker-dialog-title">Speaker</h2>
+      <label>
+        <span>Name</span>
+        <input id="speaker-dialog-name" type="text" autocomplete="off">
+      </label>
+      <label>
+        <span>Color</span>
+        <input id="speaker-dialog-color" type="color" value="#2ea3f2">
+      </label>
+      <div class="actions">
+        <button id="speaker-dialog-cancel" type="button">Cancel</button>
+        <button id="speaker-dialog-apply" type="button">Apply</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="hotword-panel" class="meetings-panel hotwords-panel" style="display:none">
+    <div class="meetings-header hotword-panel-header">
+      <h3>Quản lý hotword.txt</h3>
+      <div class="meetings-header-right">
+        <input type="text" id="hotwords-search" placeholder="Tìm hotword..." autocomplete="off">
+        <button id="btn-close-hotword-dialog" class="modal-close" type="button">&times;</button>
+      </div>
+    </div>
+    <div class="hotword-add-row">
+      <input id="hotword-new-text" type="text" autocomplete="off" placeholder="Nhập hotword mới">
+      <input id="hotword-new-score" type="hidden" value="1.5">
+      <button id="btn-add-hotword" class="btn btn-primary" type="button">Thêm</button>
+    </div>
+    <div class="meetings-toolbar hotword-toolbar">
+      <span id="hotwords-summary">0 hotword</span>
+      <div class="hotword-panel-actions">
+        <button id="btn-export-hotword-txt" class="btn btn-sm btn-secondary" type="button">Tải .txt</button>
+        <button id="btn-import-hotword-txt" class="btn btn-sm btn-secondary" type="button">Nạp .txt</button>
+        <button id="btn-reset-hotword-defaults" class="btn btn-sm btn-secondary" type="button">Khôi phục</button>
+        <input id="hotword-file-input" type="file" accept=".txt,text/plain" hidden>
+      </div>
+    </div>
+    <input id="hotwords-enabled" type="checkbox" checked hidden>
+    <input id="hotwords-score" type="hidden" value="1.5">
+    <span id="hotwords-score-value" hidden>1.5</span>
+    <div id="hotword-list" class="meetings-list hotword-list"></div>
+  </div>
+
+  <script src="/shared/js/about.js" defer></script>
+  <script src="/shared/js/status.js" defer></script>
+  <script src="/vendor/onnxruntime-web/ort.wasm.min.js" defer></script>
+  <script src="/vendor/onnxruntime-web/ort.webgpu.min.js" defer></script>
+  <script src="/vendor/longform-clustering/longform-clustering.js" defer></script>
+  <script src="/vendor/mpg123-decoder/mpg123-decoder.min.js" charset="UTF-8" defer></script>
+  <script src="/js/app.js" defer></script>
+</body>
+</html>

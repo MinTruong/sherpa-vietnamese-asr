@@ -83,8 +83,9 @@ function renderMeetingsPage() {
 
     let html = '<div class="meetings-grid">';
     for (const m of page) {
-        const statusClass = 'status-' + m.status;
-        const statusLabel = { waiting: 'Chờ', processing: 'Đang xử lý', completed: 'Hoàn thành', error: 'Lỗi' }[m.status] || m.status;
+        const statusMeta = window.getAsrFileStatus ? window.getAsrFileStatus(m) : { status: m.status, label: m.status };
+        const statusClass = 'status-' + statusMeta.status;
+        const statusLabel = statusMeta.label;
         const clickable = m.status === 'completed';
         const size = formatFileSize(m.file_size);
         const date = formatDate(m.created_at);

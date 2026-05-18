@@ -1088,6 +1088,35 @@ class ConfigTab(BaseTab):
         config_group.setLayout(cg)
         layout.addWidget(config_group)
 
+        # Offline PWA host
+        pwa_group = QGroupBox("PWA Offline")
+        pg = QFormLayout()
+
+        self.chk_offline_pwa_enabled = QCheckBox("Bat PWA Offline khi start server")
+        self.chk_offline_pwa_enabled.toggled.connect(self._on_offline_pwa_toggled)
+        pg.addRow("", self.chk_offline_pwa_enabled)
+
+        self.spin_offline_pwa_port = QSpinBox()
+        self.spin_offline_pwa_port.setRange(1, 65535)
+        self.spin_offline_pwa_port.setValue(8444)
+        self.spin_offline_pwa_port.valueChanged.connect(self._update_offline_pwa_preview)
+        pg.addRow("Cong PWA (Port):", self.spin_offline_pwa_port)
+
+        self.lbl_offline_pwa_url = QLabel("")
+        self.lbl_offline_pwa_url.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        pg.addRow("URL PWA:", self.lbl_offline_pwa_url)
+
+        self.lbl_offline_pwa_warn = QLabel("")
+        self.lbl_offline_pwa_warn.setStyleSheet(f"color: {COLORS['danger']}; font-size: 11px;")
+        self.lbl_offline_pwa_warn.hide()
+        pg.addRow("", self.lbl_offline_pwa_warn)
+
+        pwa_group.setLayout(pg)
+        layout.addWidget(pwa_group)
+
+        self.edit_host.currentTextChanged.connect(self._update_offline_pwa_preview)
+        self.edit_port.valueChanged.connect(self._update_offline_pwa_preview)
+
         # === Summarizer (Tóm tắt cuộc họp) ===
         summ_group = CollapsibleSection("📝 Tóm tắt cuộc họp (LLM)", collapsed=True)
         sg = QFormLayout()
@@ -1144,6 +1173,7 @@ class ConfigTab(BaseTab):
         self.chk_http_mode = QCheckBox("Không chạy HTTPS, chạy HTTP thôi (WAF sẽ dùng SSL Offloading)")
         self.chk_http_mode.setStyleSheet(f"color: {COLORS['warning']}; font-weight: bold; padding: 4px 0;")
         self.chk_http_mode.toggled.connect(self._on_http_mode_toggled)
+        self.chk_http_mode.toggled.connect(self._update_offline_pwa_preview)
         ssl_layout.addWidget(self.chk_http_mode)
 
         # Container cho tất cả SSL widgets (ẩn khi HTTP mode)
@@ -1295,6 +1325,13 @@ class ConfigTab(BaseTab):
             self.spin_jwt.setValue(server_config.jwt_expire_minutes)
             self.edit_offline_url.setText(server_config.get("offline_download_url"))
 
+            # Offline PWA
+            from offline_pwa.config import offline_pwa_config
+            offline_pwa_config.load()
+            self.chk_offline_pwa_enabled.setChecked(offline_pwa_config.enabled)
+            self.spin_offline_pwa_port.setValue(offline_pwa_config.port)
+            self._on_offline_pwa_toggled(offline_pwa_config.enabled)
+
             # Summarizer
             summ_path = server_config.get("summarizer_model_path") or ""
             if summ_path:
@@ -1315,6 +1352,28 @@ class ConfigTab(BaseTab):
 
         self._on_cpu_changed(self.spin_cpu.value())
         self._refresh_cert_status()
+
+    def _on_offline_pwa_toggled(self, checked):
+        self.spin_offline_pwa_port.setEnabled(checked)
+        self._update_offline_pwa_preview()
+
+    def _update_offline_pwa_preview(self):
+        if not hasattr(self, "lbl_offline_pwa_url"):
+            return
+
+        enabled = self.chk_offline_pwa_enabled.isChecked()
+        host = self.edit_host.currentText().strip() or "127.0.0.1"
+        port = self.spin_offline_pwa_port.value()
+        server_port = self.edit_port.value()
+        http_mode = bool(getattr(self, "chk_http_mode", None) and self.chk_http_mode.isChecked())
+        protocol = "http" if http_mode else "https"
+
+        self.lbl_offline_pwa_url.setText(f"{protocol}://{host}:{port}" if enabled else "Disabled")
+        if enabled and port == server_port:
+            self.lbl_offline_pwa_warn.setText("Port PWA khong duoc trung port server chinh.")
+            self.lbl_offline_pwa_warn.show()
+        else:
+            self.lbl_offline_pwa_warn.hide()
 
     def _on_summarizer_toggled(self, checked):
         """Khi toggle summarizer — check model có sẵn không."""
@@ -1917,7 +1976,18 @@ class ConfigTab(BaseTab):
 
         try:
             from web_service.config import server_config
+            from offline_pwa.config import OfflinePWAConfig
             new_host = self.edit_host.currentText()
+            offline_pwa_enabled = self.chk_offline_pwa_enabled.isChecked()
+            offline_pwa_port = self.spin_offline_pwa_port.value()
+            if offline_pwa_enabled and offline_pwa_port == self.edit_port.value():
+                QMessageBox.warning(
+                    self,
+                    "Port PWA",
+                    "Port PWA Offline khong duoc trung voi port server chinh.",
+                )
+                return
+
             server_config.set("host", new_host)
             server_config.set("port", str(self.edit_port.value()))
             server_config.set("cpu_threads", str(self.spin_cpu.value()))
@@ -1933,6 +2003,14 @@ class ConfigTab(BaseTab):
             server_config.set("summarizer_enabled", "1" if self.chk_summarizer_enabled.isChecked() else "0")
             server_config.set("summarizer_model_path", self.edit_summarizer_gguf.text().strip())
             server_config.set("summarizer_threads", str(self.spin_llm_threads.value()))
+
+            if not server_config._config.has_section("OfflinePWA"):
+                server_config._config.add_section("OfflinePWA")
+            for key, value in OfflinePWAConfig.DEFAULTS.items():
+                if not server_config._config.has_option("OfflinePWA", key):
+                    server_config._config.set("OfflinePWA", key, value)
+            server_config._config.set("OfflinePWA", "enabled", "true" if offline_pwa_enabled else "false")
+            server_config._config.set("OfflinePWA", "port", str(offline_pwa_port))
 
             server_config.save()
 

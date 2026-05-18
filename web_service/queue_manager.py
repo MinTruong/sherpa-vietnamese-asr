@@ -297,7 +297,9 @@ class QueueManager:
             def _convert_progress(pct):
                 self.progress_callback(f"PHASE:Convert|Đang chuyển định dạng audio ({pct}%)|{pct}")
 
+            convert_start = time.monotonic()
             wav_path = convert_to_wav(file_path_real, progress_callback=_convert_progress)
+            convert_elapsed = time.monotonic() - convert_start
 
             if self._cancelled:
                 raise InterruptedError("Cancelled by user")
@@ -380,6 +382,7 @@ class QueueManager:
 
                 "preprocess_rms_normalize": config.get("rms_normalize", False),
                 "bypass_vad": config.get("bypass_vad", False),
+                "_pre_convert_time": convert_elapsed,
             }
 
             logger.info(f"Pipeline config: {pipeline_config}")

@@ -5,6 +5,7 @@ let playerSegments = [];  // segments voi timestamp
 let currentHighlightIdx = -1;
 let isUserSeeking = false;
 let lastAudioSrc = '';  // luu lai src de reload khi mobile browser giai phong audio
+let localPreviewAudioUrl = '';
 
 function initPlayer() {
     audio = new Audio();
@@ -59,8 +60,41 @@ function _doReloadAudio(onReady) {
     });
 }
 
+function revokeLocalPreviewAudioUrl() {
+    if (localPreviewAudioUrl) {
+        URL.revokeObjectURL(localPreviewAudioUrl);
+        localPreviewAudioUrl = '';
+    }
+}
+
+function loadLocalAudioPreview(file) {
+    if (!file) return;
+    if (!audio) initPlayer();
+    revokeLocalPreviewAudioUrl();
+    window._audioOriginalUrl = null;
+    playerSegments = [];
+    currentHighlightIdx = -1;
+    isUserSeeking = false;
+    localPreviewAudioUrl = URL.createObjectURL(file);
+    lastAudioSrc = localPreviewAudioUrl;
+    audio.pause();
+    audio.currentTime = 0;
+    audio.src = localPreviewAudioUrl;
+    audio.load();
+    const seek = document.getElementById('player-seek');
+    if (seek) {
+        seek.value = 0;
+        seek.max = 100;
+    }
+    showPlayIcon(true);
+    updateTimeDisplay();
+    document.getElementById('player-panel').style.display = 'flex';
+}
+
 function loadAudio(fileId) {
     if (!audio) initPlayer();
+    revokeLocalPreviewAudioUrl();
+    window._audioOriginalUrl = null;
     lastAudioSrc = `/api/files/${fileId}/audio`;
     audio.src = lastAudioSrc;
     audio.load();
@@ -69,11 +103,14 @@ function loadAudio(fileId) {
 
 function hidePlayer() {
     document.getElementById('player-panel').style.display = 'none';
+    revokeLocalPreviewAudioUrl();
     if (audio) {
         audio.pause();
         audio.src = '';
     }
     lastAudioSrc = '';
+    window._audioOriginalUrl = null;
+    playerSegments = [];
     currentHighlightIdx = -1;
 }
 

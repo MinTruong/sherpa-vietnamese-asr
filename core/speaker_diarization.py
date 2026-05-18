@@ -29,6 +29,7 @@ import re
 # sherpa_onnx is imported lazily to ensure DLL paths are set up first
 _sherpa_onnx = None
 SHERPA_AVAILABLE = False  # Default to False, will be set to True on successful import
+WORD_ASSIGN_MAX_DURATION = 0.40  # seconds; cap word interval so pauses are not treated as speech
 
 def get_sherpa_onnx():
     """Lazy import sherpa_onnx to ensure DLL paths are set up first."""
@@ -820,6 +821,94 @@ class SpeakerDiarizer:
 
         return segments
 
+    @staticmethod
+    def _word_interval(word: Dict) -> Tuple[float, float]:
+        """Lấy khoảng thời gian hiệu dụng của word từ timestamp ASR."""
+        start = float(word.get("start", 0) or 0)
+        end = float(word.get("end", start) or start)
+        if end < start:
+            start, end = end, start
+        # Some ASR paths store word.end as the next word start. That makes a
+        # word cover following silence, which is harmful for speaker overlap.
+        end = min(end, start + WORD_ASSIGN_MAX_DURATION)
+        if end <= start:
+            end = start + WORD_ASSIGN_MAX_DURATION
+        return start, end
+
+    @staticmethod
+    def _interval_overlap(start_a: float, end_a: float,
+                          start_b: float, end_b: float) -> float:
+        return max(0.0, min(end_a, end_b) - max(start_a, start_b))
+
+    def _word_overlaps_speaker(self, word: Dict,
+                               speaker_segments: List[Segment],
+                               speaker_id: int) -> bool:
+        w_start, w_end = self._word_interval(word)
+        if w_end <= w_start:
+            w_end = w_start + 0.001
+        for seg in speaker_segments:
+            if seg.speaker != speaker_id:
+                continue
+            if self._interval_overlap(w_start, w_end, seg.start, seg.end) > 0:
+                return True
+        return False
+
+    def _speaker_for_word_by_time(self, word: Dict,
+                                  speaker_segments: List[Segment],
+                                  fallback_speaker: Optional[int] = None) -> int:
+        """
+        Gán speaker cho một word chỉ bằng thời gian.
+
+        Ưu tiên speaker segment có overlap lớn nhất với khoảng [word.start,
+        word.end]. Nếu word nằm trong gap giữa hai segment, chọn segment có
+        biên gần word nhất.
+        """
+        if not speaker_segments:
+            return fallback_speaker if fallback_speaker is not None else 0
+
+        w_start, w_end = self._word_interval(word)
+        if w_end <= w_start:
+            w_end = w_start + 0.001
+        w_mid = (w_start + w_end) / 2.0
+
+        best_seg = None
+        best_overlap = 0.0
+        best_center_dist = float("inf")
+        for seg in speaker_segments:
+            overlap = self._interval_overlap(w_start, w_end, seg.start, seg.end)
+            if overlap <= 0:
+                continue
+            center_dist = abs(((seg.start + seg.end) / 2.0) - w_mid)
+            if overlap > best_overlap or (
+                overlap == best_overlap and center_dist < best_center_dist
+            ):
+                best_seg = seg
+                best_overlap = overlap
+                best_center_dist = center_dist
+
+        if best_seg is not None:
+            return best_seg.speaker
+
+        prev_seg = None
+        next_seg = None
+        for seg in speaker_segments:
+            if seg.end <= w_mid:
+                if prev_seg is None or seg.end > prev_seg.end:
+                    prev_seg = seg
+            elif seg.start >= w_mid:
+                if next_seg is None or seg.start < next_seg.start:
+                    next_seg = seg
+
+        if prev_seg and next_seg:
+            dist_prev = w_mid - prev_seg.end
+            dist_next = next_seg.start - w_mid
+            return prev_seg.speaker if dist_prev <= dist_next else next_seg.speaker
+        if prev_seg:
+            return prev_seg.speaker
+        if next_seg:
+            return next_seg.speaker
+        return fallback_speaker if fallback_speaker is not None else speaker_segments[0].speaker
+
     def process_with_transcription(self,
                                    audio_file: str,
                                    transcribed_segments: List[Dict],
@@ -886,87 +975,20 @@ class SpeakerDiarizer:
                 results.append(seg_copy)
                 continue
 
-            # Word-level speaker assignment
-            # Tạo adjusted_segments: co boundary 150ms tại chỗ ĐỔI speaker
-            # Giữ nguyên boundary giữa các segment cùng speaker
-            BOUNDARY_MARGIN = 0.15   # 150ms margin tại speaker transition
-
-            adjusted_segments = []
-            n_segs = len(speaker_segments)
-            for idx, seg in enumerate(speaker_segments):
-                adj_start = seg.start
-                adj_end = seg.end
-
-                # Co start nếu segment trước là speaker khác
-                if idx > 0 and speaker_segments[idx - 1].speaker != seg.speaker:
-                    adj_start = seg.start + BOUNDARY_MARGIN
-
-                # Co end nếu segment sau là speaker khác
-                if idx < n_segs - 1 and speaker_segments[idx + 1].speaker != seg.speaker:
-                    adj_end = seg.end - BOUNDARY_MARGIN
-
-                # Đảm bảo segment còn hợp lệ (>50ms)
-                if adj_end - adj_start > 0.05:
-                    adjusted_segments.append(Segment(
-                        start=adj_start, end=adj_end, speaker=seg.speaker))
-                else:
-                    adjusted_segments.append(seg)
-
+            # Word-level speaker assignment: chỉ dùng thời gian của từ.
+            # Mỗi word được chấm theo overlap giữa [word.start, word.end]
+            # và các speaker segments; word trong gap thì gán theo biên gần nhất.
             word_groups = []
             current_speaker_id = None
             current_group = []
 
-            # Pre-build sorted list cho binary search trên original segments
-            from bisect import bisect_right
-            _orig_starts = [s.start for s in speaker_segments]
-
             for w in raw_words:
-                w_start = w.get("start", 0)
-                w_spk_id = None
-
-                # 1) Check ORIGINAL segments trước (binary search O(log n))
-                #    Quan trọng: từ ở rìa segment gốc PHẢI gán đúng, ko bị margin đẩy ra
-                idx = bisect_right(_orig_starts, w_start) - 1
-                if idx >= 0 and speaker_segments[idx].start <= w_start <= speaker_segments[idx].end:
-                    w_spk_id = speaker_segments[idx].speaker
-
-                # 2) Check adjusted segments (có margin 150ms tại speaker transitions)
-                if w_spk_id is None:
-                    for spk_seg in adjusted_segments:
-                        if spk_seg.start <= w_start <= spk_seg.end:
-                            w_spk_id = spk_seg.speaker
-                            break
-
-                # 3) Fallback: từ rơi vào TRUE gap (ngoài cả segment gốc)
-                if w_spk_id is None:
-                    prev_seg = None
-                    next_seg = None
-                    for spk_seg in adjusted_segments:
-                        if spk_seg.end <= w_start:
-                            if prev_seg is None or spk_seg.end > prev_seg.end:
-                                prev_seg = spk_seg
-                        elif spk_seg.start > w_start:
-                            if next_seg is None or spk_seg.start < next_seg.start:
-                                next_seg = spk_seg
-
-                    if prev_seg and next_seg:
-                        dist_prev = w_start - prev_seg.end
-                        dist_next = next_seg.start - w_start
-                        if prev_seg.speaker != next_seg.speaker:
-                            # Khác speaker: gán cho speaker GẦN HƠN
-                            if dist_next <= dist_prev:
-                                w_spk_id = next_seg.speaker
-                            else:
-                                w_spk_id = prev_seg.speaker
-                        else:
-                            # Cùng speaker → gán luôn
-                            w_spk_id = prev_seg.speaker
-                    elif prev_seg:
-                        w_spk_id = prev_seg.speaker
-                    elif next_seg:
-                        w_spk_id = next_seg.speaker
-                    else:
-                        w_spk_id = current_speaker_id if current_speaker_id is not None else max(speaker_votes, key=speaker_votes.get)
+                fallback = current_speaker_id
+                if fallback is None and speaker_votes:
+                    fallback = max(speaker_votes, key=speaker_votes.get)
+                w_spk_id = self._speaker_for_word_by_time(
+                    w, speaker_segments, fallback_speaker=fallback
+                )
 
                 if w_spk_id != current_speaker_id:
                     if current_group:
@@ -1031,8 +1053,6 @@ class SpeakerDiarizer:
         # → chúng thực ra là speech tiếp nối của A, diarization cắt sai → chuyển về A.
         # Chạy trên toàn bộ results (cross-sentence) vì sentence segmentation có thể
         # tách phrase thành nhiều trans_segs khác nhau.
-        from bisect import bisect_right as _br
-        _orig_starts = [s.start for s in speaker_segments]
         SPEECH_CONT_GAP = 0.3
 
         i = 0
@@ -1053,13 +1073,9 @@ class SpeakerDiarizer:
             for w in rw_b:
                 ws = w.get("start", 0)
                 if ws - last_end < SPEECH_CONT_GAP:
-                    # Chỉ move nếu word KHÔNG nằm trong segment gốc của spk_b
-                    # (word rơi vào gap hoặc thuộc segment spk_a → ASR cắt sai)
-                    idx2 = _br(_orig_starts, ws) - 1
-                    word_in_spk_b_seg = (idx2 >= 0
-                        and speaker_segments[idx2].start <= ws <= speaker_segments[idx2].end
-                        and speaker_segments[idx2].speaker == spk_b)
-                    if word_in_spk_b_seg:
+                    # Chỉ move nếu khoảng thời gian của word không overlap
+                    # với segment gốc của speaker B.
+                    if self._word_overlaps_speaker(w, speaker_segments, spk_b):
                         # Word đúng là của spk_b theo diarization → dừng, không move
                         break
                     move_count += 1
@@ -1093,11 +1109,8 @@ class SpeakerDiarizer:
                 i += 1
 
         # ── Fix trailing word at speaker boundary ──
-        # Khi ASR timestamp drift, word cuối segment A thực ra thuộc segment B.
-        # Pattern: word cuối A + word đầu B tạo thành cụm cố định (VD: "kính thưa",
-        # "xin mời", "xin chào") → chuyển word cuối A sang B.
-        # Tổng quát hơn: nếu word cuối A nằm NGOÀI diarization segment của A
-        # (timestamp > segment.end) → nên thuộc B.
+        # Nếu khoảng thời gian của word cuối segment A không overlap với
+        # diarization segment của A thì word đó nên được kiểm tra lại ở B.
         i = 0
         while i < len(results) - 1:
             seg_a = results[i]
@@ -1113,13 +1126,9 @@ class SpeakerDiarizer:
 
             # Check: word cuối A nằm ngoài diarization segment của A?
             last_word = rw_a[-1]
-            lw_start = last_word.get("start", 0)
-
-            # Tìm diarization segment chứa last word
-            idx_lw = _br(_orig_starts, lw_start) - 1
-            word_in_spk_a = (idx_lw >= 0
-                and speaker_segments[idx_lw].start <= lw_start <= speaker_segments[idx_lw].end
-                and speaker_segments[idx_lw].speaker == spk_a)
+            word_in_spk_a = self._word_overlaps_speaker(
+                last_word, speaker_segments, spk_a
+            )
 
             if not word_in_spk_a and len(rw_a) > 1:
                 # Word cuối A không thuộc segment A → chuyển sang B

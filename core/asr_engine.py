@@ -450,20 +450,8 @@ def split_long_segments(segments, max_duration=12.0, preserve_raw_words=False):
 
 def _find_ffmpeg():
     """Find ffmpeg executable path."""
-    import shutil
-    path = shutil.which("ffmpeg")
-    if path:
-        return path
-    possible = [
-        os.path.join(os.path.dirname(sys.executable), "ffmpeg.exe"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ffmpeg.exe"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ffmpeg", "bin", "ffmpeg.exe"),
-        r"C:\ffmpeg\bin\ffmpeg.exe",
-    ]
-    for p in possible:
-        if os.path.exists(p):
-            return p
-    return None
+    from core.audio_decode import find_ffmpeg
+    return find_ffmpeg()
 
 
 def _load_audio_ffmpeg_pipe(file_path, sample_rate=16000):
@@ -472,34 +460,8 @@ def _load_audio_ffmpeg_pipe(file_path, sample_rate=16000):
 
     Returns: float32 numpy array (mono, target sample rate)
     """
-    import subprocess
-
-    ffmpeg = _find_ffmpeg()
-    if not ffmpeg:
-        raise FileNotFoundError("ffmpeg not found")
-
-    cmd = [
-        ffmpeg, "-i", file_path,
-        "-vn",                                       # no video
-        "-af", "aresample=resampler=soxr:precision=20",  # SoXR HQ resampler
-        "-ac", "1",                                  # mono
-        "-ar", str(sample_rate),                     # target sample rate
-        "-f", "f32le",                               # raw float32 little-endian
-        "-acodec", "pcm_f32le",
-        "-loglevel", "error",
-        "pipe:1"                                     # output to stdout
-    ]
-
-    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            creationflags=creationflags)
-    raw_bytes, stderr = proc.communicate()
-
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg error: {stderr.decode('utf-8', errors='replace')[:200]}")
-
-    audio = np.frombuffer(raw_bytes, dtype=np.float32)
-    return audio
+    from core.audio_decode import load_audio_ffmpeg_pipe
+    return load_audio_ffmpeg_pipe(file_path, sample_rate)
 
 
 def load_audio(file_path, sample_rate=16000, progress_callback=None, **kwargs):
@@ -2529,6 +2491,7 @@ class TranscriberPipeline:
         # ══════════════════════════════════════════════════════
         speaker_segments = []
         speaker_segments_raw = []
+        raw_segments = []
         diarization_start = None
         _diar_speaker_groups = None
 
@@ -2583,7 +2546,9 @@ class TranscriberPipeline:
                         ]
 
                         merger = SpeakerDiarizer()
-                        raw_segments = merger._post_process_diarization_segments(raw_segments)
+                        raw_segments = merger._post_process_diarization_segments(
+                            raw_segments, asr_words=all_words
+                        )
                         speaker_segments_raw = [
                             {"speaker": f"Người nói {seg.speaker+1}", "speaker_id": seg.speaker,
                              "start": seg.start, "end": seg.end, "duration": seg.duration}
@@ -2795,15 +2760,22 @@ class TranscriberPipeline:
                 # Build pause_hints từ word timestamps + inject tại speaker boundaries
                 # pause_hints[i] = gap (giây) sau word i
                 # Tại word cuối mỗi speaker turn: đảm bảo >= 1.0 (nudge dấu chấm)
+                time_word_speaker = None
+                time_word_speaker_name = None
+                if raw_segments and all_words:
+                    time_mapper = SpeakerDiarizer()
+                    time_word_speaker = []
+                    time_word_speaker_name = []
+                    for w in all_words:
+                        spk_id = time_mapper._speaker_for_word_by_time(
+                            w, raw_segments
+                        )
+                        time_word_speaker.append(spk_id)
+                        time_word_speaker_name.append(f"Người nói {spk_id + 1}")
+
                 pause_hints = None
                 if all_words and len(all_words) >= 2:
                     pause_hints = []
-                    # Tập hợp word indices cuối mỗi speaker turn
-                    speaker_boundary_times = set()
-                    for turn in _diar_speaker_groups:
-                        rw = turn.get("raw_words", [])
-                        if rw:
-                            speaker_boundary_times.add(rw[-1].get("end", 0))
 
                     for i in range(len(all_words)):
                         if i < len(all_words) - 1:
@@ -2812,9 +2784,14 @@ class TranscriberPipeline:
                         else:
                             gap = 1.0  # word cuối → kết thúc
 
-                        # Inject tại speaker boundary: đảm bảo gap >= 1.0
-                        w_end = all_words[i].get("end", 0)
-                        if w_end in speaker_boundary_times:
+                        # Inject tại speaker boundary: đảm bảo gap >= 1.0.
+                        # Dùng mapping time-based của từng word, không dùng
+                        # ranh giới text sau punctuation.
+                        if (
+                            time_word_speaker is not None
+                            and i < len(time_word_speaker) - 1
+                            and time_word_speaker[i] != time_word_speaker[i + 1]
+                        ):
                             gap = max(gap, 1.0)
 
                         pause_hints.append(gap)
@@ -2849,20 +2826,25 @@ class TranscriberPipeline:
                 # Sentence split trên full_text đã punct
                 sentences = re.split(r'(?<=[.?!])\s+', full_text)
 
-                # Build word-index → speaker mapping từ diarization
-                # Mỗi word trong all_words được gán speaker_id từ _diar_speaker_groups
-                word_speaker = [0] * len(all_words)
-                word_speaker_name = ["Người nói 1"] * len(all_words)
-                global_idx = 0
-                for turn in _diar_speaker_groups:
-                    rw = turn.get("raw_words", [])
-                    spk_id = turn.get("speaker_id", 0)
-                    spk_name = turn.get("speaker", "Người nói 1")
-                    for _ in rw:
-                        if global_idx < len(all_words):
-                            word_speaker[global_idx] = spk_id
-                            word_speaker_name[global_idx] = spk_name
-                        global_idx += 1
+                # Build word-index → speaker mapping từ thời gian word và
+                # raw speaker segments. Không dựa vào ranh giới câu/text đã
+                # thêm dấu, vì punctuation chạy sau diarization.
+                if time_word_speaker is not None:
+                    word_speaker = time_word_speaker
+                    word_speaker_name = time_word_speaker_name
+                else:
+                    word_speaker = [0] * len(all_words)
+                    word_speaker_name = ["Người nói 1"] * len(all_words)
+                    global_idx = 0
+                    for turn in _diar_speaker_groups:
+                        rw = turn.get("raw_words", [])
+                        spk_id = turn.get("speaker_id", 0)
+                        spk_name = turn.get("speaker", "Người nói 1")
+                        for _ in rw:
+                            if global_idx < len(all_words):
+                                word_speaker[global_idx] = spk_id
+                                word_speaker_name[global_idx] = spk_name
+                            global_idx += 1
 
                 # Alignment: map sentences → all_words (giống flow gốc)
                 current_word_idx = 0

@@ -1,6 +1,9 @@
 # Configuration files (user-specific)
 config.ini
 
+# Log files (cleared on restart)
+logs/
+
 # Python cache
 __pycache__/
 *.py[cod]
@@ -62,6 +65,8 @@ test_mic_results.txt
 *.ogg
 *.flac
 !test_audio.wav      # Keep small test file
+!offline_pwa/static/calibration/
+!offline_pwa/static/calibration/1hour_qh_10min.mp3
 
 # Large binary files
 *.exe
@@ -75,6 +80,11 @@ Thuvien/
 
 # Agent config
 .agent/
+.claude/
+
+# Android app lives in a separate project/release track
+native_android/
+tools/android-env.ps1
 
 # Project specific
 1hour_qh_10min.asr.json
@@ -93,7 +103,12 @@ generate_bpe_vocab.py
 *.db-shm
 *.db-wal
 .claude/settings.json
+run_single_asr.py
+analyze_asr_results.py
+final_report.md
+.claude/*
+*.gguf
 
-# Secrets & certs
+# Web service runtime data, secrets, certificates, and uploads
+web_service/data/
 web_service/certs/
-web_service/data/.jwt_secret

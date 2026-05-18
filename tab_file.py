@@ -998,7 +998,12 @@ class FileProcessingTab(QWidget):
         self.selected_file = file_path
         self.drop_label.setFileText(os.path.basename(file_path))
         self.btn_process.setEnabled(True)
-        self.player_container.setVisible(False)
+        self.player.stop()
+        self.player.setSource(QUrl())
+        self.btn_play.setEnabled(False)
+        self.slider_seek.setRange(0, 0)
+        self.label_time.setText("00:00 / 00:00")
+        self.player_container.setVisible(True)
         self.text_output.clear()
         self.btn_rerun_diarization.setEnabled(False)
         self.btn_copy_text.setEnabled(False)
@@ -1040,9 +1045,15 @@ class FileProcessingTab(QWidget):
 
         if self.segments:
              self.btn_rerun_diarization.setEnabled(self.check_speaker_diarization.isChecked())
+
+        self._bg_audio_thread = BackgroundAudioConvertThread(file_path)
+        self._bg_audio_thread.finished_converting.connect(
+            lambda p, t=self._bg_audio_thread: self._on_audio_converted(p, file_path, t, show_ready_message=False)
+        )
+        self._bg_audio_thread.start()
         
 
-    def _on_audio_converted(self, temp_path, original_path, thread=None):
+    def _on_audio_converted(self, temp_path, original_path, thread=None, show_ready_message=True):
         if thread and thread != getattr(self, '_bg_audio_thread', None):
             thread.deleteLater()
             return
@@ -1057,7 +1068,7 @@ class FileProcessingTab(QWidget):
         if hasattr(self.text_output, 'set_clickable'):
             self.text_output.set_clickable(True) # Mở khoá click tua
             
-        if getattr(self, '_json_load_thread', None) is None:
+        if show_ready_message and getattr(self, '_json_load_thread', None) is None:
             self.stop_spinner()
             self.progress_bar.setFormat("✓ Đã tải dữ liệu và âm thanh hoàn chỉnh")
             self.progress_bar.setValue(100)
@@ -3834,5 +3845,3 @@ class FileProcessingTab(QWidget):
             # Reset merged_speaker_blocks để render lại từ đầu
             self.merged_speaker_blocks = []
             self.render_text_content(immediate=True)
-
-

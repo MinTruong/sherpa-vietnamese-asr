@@ -118,6 +118,54 @@ def setup_paths():
         sys.path.insert(0, base_dir)
 
 
+def _start_offline_pwa_server(host, main_port, use_http, cert_file, key_file, logger):
+    """Start the browser-only offline PWA host on its own port."""
+    try:
+        from offline_pwa.config import offline_pwa_config
+    except Exception as e:
+        logger.warning(f"Offline PWA config unavailable, skipping: {e}")
+        return None
+
+    if not offline_pwa_config.enabled:
+        logger.info("Offline PWA is disabled")
+        return None
+
+    offline_port = offline_pwa_config.port
+    if int(offline_port) == int(main_port):
+        logger.error(
+            f"Offline PWA port {offline_port} conflicts with main server port; skipping"
+        )
+        return None
+
+    import threading
+    import uvicorn
+
+    uvicorn_kwargs = dict(
+        app="offline_pwa.server:app",
+        host=host,
+        port=offline_port,
+        log_level="info",
+        access_log=False,
+        use_colors=False,
+    )
+    if not use_http:
+        uvicorn_kwargs["ssl_certfile"] = cert_file
+        uvicorn_kwargs["ssl_keyfile"] = key_file
+
+    config = uvicorn.Config(**uvicorn_kwargs)
+    server = uvicorn.Server(config)
+    thread = threading.Thread(
+        target=server.run,
+        name="offline-pwa-server",
+        daemon=True,
+    )
+    thread.start()
+
+    protocol = "http" if use_http else "https"
+    logger.info(f"Offline PWA starting on {protocol}://{host}:{offline_port}")
+    return server, thread
+
+
 def start_server(host=None, port=None, no_gui=False):
     """Khoi dong FastAPI server"""
     setup_paths()
@@ -199,6 +247,15 @@ def start_server(host=None, port=None, no_gui=False):
             )
 
         import uvicorn
+        _start_offline_pwa_server(
+            actual_host,
+            actual_port,
+            use_http,
+            cert_file,
+            key_file,
+            logger,
+        )
+
         uvicorn_kwargs = dict(
             app="web_service.server:app",
             host=actual_host,

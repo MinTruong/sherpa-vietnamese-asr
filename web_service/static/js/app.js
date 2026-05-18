@@ -252,6 +252,7 @@ let currentASRData = null;
 window.authToken = null;
 window.appConfig = null;
 let _dirty = false;
+let currentProcessStartedAt = null;
 
 // === Init ===
 
@@ -340,19 +341,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 });
 
-function showAboutDialog() {
-    document.getElementById('about-modal').style.display = 'flex';
-    // Fetch version từ server
-    fetch('/api/version').then(r => r.json()).then(d => {
-        const el = document.getElementById('about-version-text');
-        if (el && d.version) el.textContent = 'Phiên bản ' + d.version;
-    }).catch(() => {});
-}
-
-function hideAboutDialog() {
-    document.getElementById('about-modal').style.display = 'none';
-}
-
 function updateHeaderTitle(isLoggedIn) {
     // Warning in empty drop zone
     const warnEmpty = document.getElementById('anonymous-warning-empty');
@@ -365,6 +353,22 @@ function updateHeaderTitle(isLoggedIn) {
         // Only show if anonymous AND a file is selected
         const hasFile = document.getElementById('file-selected')?.style.display !== 'none';
         warnFile.style.display = (!isLoggedIn && hasFile) ? 'block' : 'none';
+    }
+    syncJsonUploadVisibility();
+}
+
+function syncJsonUploadVisibility() {
+    const isAnonymous = !window.authToken;
+    const btnLoadJson = document.getElementById('btn-load-json');
+    if (btnLoadJson) {
+        const hasUploadedFile = typeof uploadedFile !== 'undefined' && !!uploadedFile;
+        btnLoadJson.style.display = isAnonymous ? '' : 'none';
+        btnLoadJson.disabled = !isAnonymous || !hasUploadedFile;
+    }
+    const fileInput = document.getElementById('file-input');
+    if (fileInput) {
+        const baseAccept = '.mp3,.wav,.m4a,.flac,.aac,.wma,.ogg,.opus,.mp4,.mkv,.avi,.mov,.webm,.flv,.wmv';
+        fileInput.setAttribute('accept', isAnonymous ? baseAccept + ',.json' : baseAccept);
     }
 }
 
@@ -431,8 +435,11 @@ function updateSliderLabels() {
     const c = document.getElementById('cfg-case').value;
     document.getElementById('cfg-case-label').textContent = getConfLabel(c) + ` (${c})`;
 
-    const t = document.getElementById('cfg-threshold').value;
-    document.getElementById('cfg-threshold-label').textContent = (t / 100).toFixed(2);
+    const thresholdEl = document.getElementById('cfg-threshold');
+    const thresholdLabel = document.getElementById('cfg-threshold-label');
+    if (thresholdEl && thresholdLabel) {
+        thresholdLabel.textContent = (thresholdEl.value / 100).toFixed(2);
+    }
 }
 
 function getConfLabel(v) {
@@ -453,6 +460,7 @@ function togglePanel(panelId) {
 // === Process file ===
 
 async function processFile() {
+    currentProcessStartedAt = performance.now();
     if (!uploadedFile) return;
 
     // User đã login → hỏi tên cuộc họp trước
@@ -583,6 +591,11 @@ function onProgress(data) {
 
 function onASRComplete(data) {
     if (data.file_id !== currentFileId) return;
+    if (currentProcessStartedAt) {
+        data.result.timing = data.result.timing || {};
+        data.result.timing.total = (performance.now() - currentProcessStartedAt) / 1000;
+        currentProcessStartedAt = null;
+    }
     currentASRData = data.result;
     renderASRResult(data.result);
     clearDirty();
@@ -599,12 +612,14 @@ function onASRComplete(data) {
 
 function onASRError(data) {
     if (data.file_id !== currentFileId) return;
+    currentProcessStartedAt = null;
     showToast('Lỗi xử lý: ' + data.error, 'error');
     resetProcessUI();
 }
 
 function onASRCancelled(data) {
     if (data.file_id !== currentFileId) return;
+    currentProcessStartedAt = null;
     showToast('Đã hủy xử lý', 'success');
     resetProcessUI();
 }
@@ -792,20 +807,20 @@ function renderQualityStrip(quality) {
 
     if (quality.dnsmos_sig !== undefined) {
         const c = _qColor(quality.dnsmos_sig, dnsThresh);
-        items.push(`<span class="qs-item" title="DNSMOS - Chất lượng giọng nói">Giọng nói <span class="qs-val" style="color:${c}">${quality.dnsmos_sig.toFixed(1)}/5</span></span>`);
+        items.push(`<span class="qs-item" title="DNSMOS - Ch\u1ea5t l\u01b0\u1ee3ng gi\u1ecdng n\u00f3i">Gi\u1ecdng n\u00f3i <span class="qs-val" style="color:${c}">${quality.dnsmos_sig.toFixed(1)}/5</span></span>`);
     }
     if (quality.dnsmos_bak !== undefined) {
         const c = _qColor(quality.dnsmos_bak, dnsThresh);
-        items.push(`<span class="qs-item" title="DNSMOS - Nhiễu, vang nền">Nhiễu nền <span class="qs-val" style="color:${c}">${quality.dnsmos_bak.toFixed(1)}/5</span></span>`);
+        items.push(`<span class="qs-item" title="DNSMOS - Nhi\u1ec5u, vang n\u1ec1n">Nhi\u1ec5u n\u1ec1n <span class="qs-val" style="color:${c}">${quality.dnsmos_bak.toFixed(1)}/5</span></span>`);
     }
     if (quality.dnsmos_ovrl !== undefined) {
         const c = _qColor(quality.dnsmos_ovrl, dnsThresh);
-        items.push(`<span class="qs-item" title="DNSMOS - Chất lượng tổng thể">Tổng thể <span class="qs-val" style="color:${c}">${quality.dnsmos_ovrl.toFixed(1)}/5</span></span>`);
+        items.push(`<span class="qs-item" title="DNSMOS - Ch\u1ea5t l\u01b0\u1ee3ng t\u1ed5ng th\u1ec3">T\u1ed5ng th\u1ec3 <span class="qs-val" style="color:${c}">${quality.dnsmos_ovrl.toFixed(1)}/5</span></span>`);
     }
     if (quality.asr_confidence !== undefined) {
         const pct = (quality.asr_confidence * 100).toFixed(1);
         const c = _qColor(quality.asr_confidence, confThresh);
-        items.push(`<span class="qs-item" title="Mức độ tự tin dịch chính xác của mô hình ASR">Mức độ tự tin dịch chính xác <span class="qs-val" style="color:${c}">${pct}%</span></span>`);
+        items.push(`<span class="qs-item" title="M\u1ee9c \u0111\u1ed9 t\u1ef1 tin d\u1ecbch ch\u00ednh x\u00e1c c\u1ee7a m\u00f4 h\u00ecnh ASR">M\u1ee9c \u0111\u1ed9 t\u1ef1 tin d\u1ecbch ch\u00ednh x\u00e1c <span class="qs-val" style="color:${c}">${pct}%</span></span>`);
     }
 
     if (items.length === 0) {
@@ -814,9 +829,8 @@ function renderQualityStrip(quality) {
     }
 
     strip.style.display = 'flex';
-    strip.innerHTML = `<span class="qs-label">Chất lượng:</span>${items.join('<span class="qs-sep">·</span>')}`;
+    strip.innerHTML = `<span class="qs-label">Ch\u1ea5t l\u01b0\u1ee3ng:</span>${items.join('<span class="qs-sep">\u00b7</span>')}`;
 }
-
 function renderTimingInfo(timing) {
     const el = document.getElementById('result-timing');
     if (!el) return;
@@ -826,22 +840,25 @@ function renderTimingInfo(timing) {
         return;
     }
 
-    el.style.display = 'flex';
-
-    // Mapping keys to labels (from asr_engine.py timing_details)
+    const normalized = {
+        preprocessing: Number(timing.preprocessing ?? timing.upload_convert ?? 0),
+        transcription_detail: Number(timing.transcription_detail ?? timing.asr ?? timing.transcription ?? 0),
+        diarization: Number(timing.diarization ?? 0),
+        punctuation: Number(timing.punctuation ?? 0),
+        total: Number(timing.total ?? 0),
+    };
     const labels = {
-        'upload_convert': 'Tải audio',
-        'transcription_detail': 'Chuyển văn bản',
-        'punctuation': 'Dấu câu',
-        'alignment': 'Căn chỉnh',
-        'diarization': 'Phân tách người nói',
-        'total': 'Tổng cộng'
+        preprocessing: 'PreProcessing',
+        transcription_detail: 'ASR',
+        diarization: 'Ph\u00e2n t\u00e1ch ng\u01b0\u1eddi n\u00f3i',
+        punctuation: 'D\u1ea5u c\u00e2u',
+        total: 'T\u1ed5ng th\u1eddi gian',
     };
 
     let html = '';
     for (const [key, label] of Object.entries(labels)) {
-        const value = timing[key];
-        if (value !== undefined && value !== null && value > 0) {
+        const value = normalized[key];
+        if (Number.isFinite(value) && value > 0) {
             html += `
                 <div class="timing-item">
                     <span class="timing-label">${label}:</span>
@@ -851,19 +868,9 @@ function renderTimingInfo(timing) {
         }
     }
 
-    // Neu chi co "total" thi hien thi total
-    if (html === '' && timing.total) {
-        html = `
-            <div class="timing-item">
-                <span class="timing-label">Tổng thời gian:</span>
-                <span class="timing-value">${timing.total.toFixed(1)}s</span>
-            </div>
-        `;
-    }
-
     el.innerHTML = html;
+    el.style.display = html ? 'flex' : 'none';
 }
-
 function _safeColor(c) {
     if (!c) return '';
     // A03: Chỉ cho phép #hex, rgb(), rgba(), named colors — chặn CSS injection
@@ -1312,6 +1319,9 @@ async function restoreSessionState() {
 function loadAudioFromUrl(url) {
     // Load audio vào player từ URL (cho meetings)
     if (!audio) initPlayer();
+    if (typeof revokeLocalPreviewAudioUrl === 'function') {
+        revokeLocalPreviewAudioUrl();
+    }
     const headers = {};
     if (window.authToken) {
         headers['Authorization'] = 'Bearer ' + window.authToken;

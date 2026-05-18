@@ -16,13 +16,13 @@ set "PYTHONDONTWRITEBYTECODE=1"
 set "QT6_BIN=%BASE_DIR%python\Lib\site-packages\PyQt6\Qt6\bin"
 set "PATH=%QT6_BIN%;%BASE_DIR%python;%BASE_DIR%python\Lib\site-packages;%BASE_DIR%;%PATH%"
 
-rem Doc host va port tu config.ini
+rem Doc host/port dung section tu config.ini
 set "HOST=0.0.0.0"
 set "PORT=8443"
 set "HTTP_MODE=0"
-for /f "tokens=2 delims== " %%a in ('findstr /i "^host " "%BASE_DIR%config.ini" 2^>nul') do set "HOST=%%a"
-for /f "tokens=2 delims== " %%a in ('findstr /i "^port " "%BASE_DIR%config.ini" 2^>nul') do set "PORT=%%a"
-for /f "tokens=2 delims== " %%a in ('findstr /i "^http_mode " "%BASE_DIR%config.ini" 2^>nul') do set "HTTP_MODE=%%a"
+set "PWA_ENABLED=1"
+set "PWA_PORT=8444"
+for /f "tokens=1,* delims==" %%A in ('"%PYTHON_EXE%" -c "import configparser, os; c=configparser.ConfigParser(); c.read(os.path.join(os.environ['BASE_DIR'], 'config.ini'), encoding='utf-8'); s=c['ServerSettings'] if c.has_section('ServerSettings') else {}; p=c['OfflinePWA'] if c.has_section('OfflinePWA') else {}; v=p.get('enabled','true').strip().lower(); print('HOST='+s.get('host','0.0.0.0')); print('PORT='+s.get('port','8443')); print('HTTP_MODE='+s.get('http_mode','0')); print('PWA_ENABLED='+('1' if v in ('1','true','yes','on') else '0')); print('PWA_PORT='+p.get('port','8444'))" 2^>nul') do set "%%A=%%B"
 
 if "%HTTP_MODE%"=="1" (set "PROTO=http") else (set "PROTO=https")
 
@@ -36,8 +36,19 @@ echo  Truy cap:
 if "%HOST%"=="0.0.0.0" (
     echo    %PROTO%://localhost:%PORT%
     echo    %PROTO%://[IP-may-nay]:%PORT%
+    if "%PWA_ENABLED%"=="1" (
+        echo.
+        echo  PWA offline:
+        echo    %PROTO%://localhost:%PWA_PORT%
+        echo    %PROTO%://[IP-may-nay]:%PWA_PORT%
+    )
 ) else (
     echo    %PROTO%://%HOST%:%PORT%
+    if "%PWA_ENABLED%"=="1" (
+        echo.
+        echo  PWA offline:
+        echo    %PROTO%://%HOST%:%PWA_PORT%
+    )
 )
 echo.
 echo  Dang nhap admin de quan tri qua web.

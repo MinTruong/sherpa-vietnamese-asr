@@ -1,0 +1,430 @@
+/* Offline PWA-only layer.
+   The visual system and normal app layout come from /shared/css/style.css. */
+
+details.panel > .panel-header {
+  list-style: none;
+}
+
+:root {
+  --ui-text-scale: 1.1;
+}
+
+body {
+  font-size: calc(16px * var(--ui-text-scale));
+}
+
+body .header-title {
+  font-size: calc(18px * var(--ui-text-scale));
+}
+
+body .btn,
+body .config-row label,
+body .config-row select,
+body .config-row input[type="text"],
+body .progress-header,
+body .queue-info,
+body .tab-btn,
+body .form-group label,
+body .form-group input,
+body .form-group select,
+body .meetings-header-right input,
+body #hotwords-search,
+body .hotword-add-row input[type="text"],
+body .hotword-row input[type="text"],
+body .summary-item,
+body .result-timing,
+body .quality-strip {
+  font-size: calc(13px * var(--ui-text-scale));
+}
+
+body .btn-sm,
+body .config-row span,
+body .drop-warning,
+body .file-anonymous-warning,
+body #file-size,
+body #search-input,
+body #search-count,
+body .search-btn,
+body #player-time,
+body .mg-page-info,
+body .mg-status,
+body .meeting-rename-input {
+  font-size: calc(12px * var(--ui-text-scale));
+}
+
+body .drop-hint,
+body .mg-meta,
+body .admin-table .admin-mono {
+  font-size: calc(11px * var(--ui-text-scale));
+}
+
+body .drop-zone-left p,
+body .result-content,
+body .speaker-text,
+body .speaker-label,
+body .mg-name {
+  font-size: calc(14px * var(--ui-text-scale));
+}
+
+body .meetings-header h3,
+body .summary-title,
+body .btn-play,
+body .hotword-remove {
+  font-size: calc(16px * var(--ui-text-scale));
+}
+
+details.panel > .panel-header::-webkit-details-marker {
+  display: none;
+}
+
+details.panel:not([open]) > .panel-body {
+  display: none;
+}
+
+details.panel:not([open]) .panel-toggle {
+  transform: rotate(-90deg);
+}
+
+.panel-toggle {
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.app-only {
+  display: none !important;
+}
+
+body.standalone-app .app-only {
+  display: block !important;
+}
+
+body.standalone-app .header-right.app-only {
+  display: flex !important;
+}
+
+body.standalone-app #install-panel {
+  display: none !important;
+}
+
+#offline-bootstrap-panel {
+  display: none;
+}
+
+body.standalone-app.bootstrap-needed #offline-bootstrap-panel {
+  display: block !important;
+}
+
+body.standalone-app.calibration-pending #offline-bootstrap-panel,
+body.standalone-app.calibration-busy #offline-bootstrap-panel {
+  display: block !important;
+}
+
+body.standalone-app.bootstrap-needed #app-main > :not(#offline-bootstrap-panel) {
+  display: none !important;
+}
+
+body.standalone-app.calibration-pending #app-main > :not(#offline-bootstrap-panel),
+body.standalone-app.calibration-busy #app-main > :not(#offline-bootstrap-panel) {
+  display: none !important;
+}
+
+body.standalone-app.bootstrap-needed .app-only,
+body.standalone-app.bootstrap-needed #meetings-panel,
+body.standalone-app.calibration-pending .app-only,
+body.standalone-app.calibration-pending #meetings-panel,
+body.standalone-app.calibration-busy .app-only,
+body.standalone-app.calibration-busy #meetings-panel {
+  display: none !important;
+}
+
+body.standalone-app.offline-ready:not(.calibration-pending):not(.calibration-busy) #offline-bootstrap-panel {
+  display: none !important;
+}
+
+body.browser-install-mode #app-main > :not(#install-panel),
+body.browser-install-mode #player-panel,
+body.browser-install-mode #btn-scroll-top {
+  display: none !important;
+}
+
+body.browser-install-mode #install-panel {
+  display: block !important;
+}
+
+.technical-internals,
+.advanced-settings,
+#advanced-settings-mount,
+[hidden] {
+  display: none !important;
+}
+
+.drop-zone input[type="file"] {
+  display: none;
+}
+
+.file-panel .panel-body {
+  padding: 0;
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+.offline-bootstrap-panel {
+  max-width: 760px;
+  margin: 10px auto;
+}
+
+.offline-bootstrap-panel .panel-body {
+  display: grid;
+  gap: 12px;
+}
+
+.bootstrap-status-line {
+  color: var(--accent);
+}
+
+.bootstrap-progress .progress-fill {
+  transition: width 0.35s ease;
+}
+
+.calibration-actions {
+  display: none;
+  justify-content: flex-end;
+}
+
+body.standalone-app.calibration-pending .calibration-actions,
+body.standalone-app.calibration-busy .calibration-actions {
+  display: flex;
+}
+
+.manual-install-guide {
+  color: var(--text-secondary);
+  font-style: normal;
+  line-height: 1.55;
+}
+
+.manual-install-guide strong {
+  color: var(--text-primary);
+}
+
+.manual-install-guide ol {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+.speaker-dialog {
+  width: min(420px, calc(100vw - 32px));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  padding: 0;
+}
+
+.hotword-manager-row button {
+  justify-self: start;
+}
+
+.hotwords-panel {
+  width: 640px;
+}
+
+#hotwords-search {
+  width: 230px;
+  height: 34px;
+  padding: 5px 10px;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.hotword-add-row,
+.hotword-panel-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.hotword-panel-actions {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.hotword-panel-actions .btn {
+  flex: 0 0 auto;
+  min-width: 74px;
+  padding-left: 8px;
+  padding-right: 8px;
+  white-space: nowrap;
+}
+
+.hotword-add-row {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.hotword-add-row input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 5px 9px;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.hotword-add-row .btn {
+  flex: 0 0 auto;
+  height: 34px;
+  min-width: 72px;
+  padding: 5px 12px;
+  font-size: 13px;
+}
+
+.hotword-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hotword-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.hotword-row:hover {
+  background: rgba(0, 123, 255, 0.08);
+  border-color: var(--accent);
+}
+
+.hotword-index {
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: right;
+}
+
+.hotword-row input[type="text"] {
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  padding: 4px 7px;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.hotword-row input[type="text"]:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.hotword-remove {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.hotword-toolbar {
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.hotword-toolbar #hotwords-summary {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.speaker-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.speaker-dialog-body {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.speaker-dialog-body label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.speaker-dialog-body label span {
+  flex: 0 0 64px;
+  color: var(--text-secondary);
+}
+
+.speaker-dialog-body .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 760px) {
+  .speaker-dialog-body label {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .hotword-add-row {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .hotword-row {
+    grid-template-columns: 30px minmax(0, 1fr) 28px;
+  }
+
+  .hotword-add-row input[type="text"] {
+    flex-basis: auto;
+  }
+
+  .hotwords-panel {
+    width: 98vw;
+  }
+
+  #hotwords-search {
+    width: 140px;
+  }
+
+  .hotword-toolbar {
+    align-items: stretch;
+  }
+
+  .hotword-toolbar #hotwords-summary {
+    min-width: 70px;
+  }
+
+  .hotword-panel-actions {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+  }
+}

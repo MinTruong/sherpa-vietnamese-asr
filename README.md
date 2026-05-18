@@ -5,20 +5,21 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-lightgrey)
-![Version](https://img.shields.io/badge/Version-2.5.0-orange)
+![Version](https://img.shields.io/badge/Version-2.5.2-orange)
 ![Runtime](https://img.shields.io/badge/Runtime-ONNX%20only-success)
 
-## Hai bản phân phối
+## Ba chế độ sử dụng
 
-| | Desktop App | Web Service |
-|--|-------------|-------------|
-| **Giao diện** | PyQt6 GUI | FastAPI + Web UI (PWA) |
-| **Đa người dùng** | Không | Có (anonymous + login) |
-| **Launcher** | `sherpa-vietnamese-asr.bat` | `sherpa-vietnamese-asr-service.bat` |
+| | Desktop App | Web Service | Offline PWA |
+|--|-------------|-------------|-------------|
+| **Giao diện** | PyQt6 GUI | FastAPI + Web UI | Browser PWA installable |
+| **Xử lý ASR** | Local Python + ONNX Runtime | Server-side queue | Browser-side WASM/WebGPU |
+| **Đa người dùng** | Không | Có (anonymous + login) | Không, chạy trên thiết bị |
+| **Launcher** | `sherpa-vietnamese-asr.bat` | `sherpa-vietnamese-asr-service.bat` | Tự bật cùng web service nếu `[OfflinePWA] enabled=true` |
 
 ## Tính năng
 
-### Chung (Desktop & Web)
+### Chung (Desktop, Web Service & Offline PWA)
 
 - **Chuyển giọng nói thành văn bản** — MP3, WAV, M4A, FLAC, AAC, OGG, MP4, MKV, AVI, MOV, WEBM...
 - **3 model ASR** — Zipformer 30M (nhanh), Zipformer 68M (chính xác), ROVER (bỏ phiếu 2 model)
@@ -31,7 +32,7 @@
 - **Tự động thêm dấu câu, viết hoa** — ViBERT-capu (ONNX FP32/INT8) + pause hints
 - **Hỗ trợ hotwords** — tên riêng, thuật ngữ chuyên ngành (Aho-Corasick)
 - **Đánh giá chất lượng** — DNSMOS + ASR confidence
-- **Resampling chất lượng cao** — SoXR HQ (desktop) / VHQ (web service)
+- **Decode/resampling thống nhất** — FFmpeg pipe + SoXR 16 kHz mono cho ASR và diarization, giảm lệch kết quả giữa file audio/video
 
 ### Desktop App
 
@@ -43,9 +44,18 @@
 ### Web Service
 
 - **Tóm tắt cuộc họp** — Gemma 4 E2B qua llama-cpp-python (GGUF, chạy CPU)
-- **PWA** — cài trên mobile/desktop như app native
+- **PWA online** — cài trên mobile/desktop như app native
+- **Offline PWA host** — chạy song song trên port riêng, mặc định `https://IP:8444`
 - **Admin GUI** — quản lý server, session, queue, user
 - **Windows Service** — chạy headless hoặc cài service
+
+### Offline PWA
+
+- **Chạy ASR trong trình duyệt** — Sherpa-ONNX WASM, ONNX Runtime Web, WebGPU cho dấu câu FP32 khi trình duyệt hỗ trợ
+- **Model bootstrap đầy đủ** — tải model pack từ server nội bộ, cache bằng OPFS/Cache Storage để dùng sau khi mất mạng
+- **Pipeline gần tương đương desktop** — VAD, ROVER 2 model, hotwords, punctuation, CAM++ diarization, Pyannote Community-1 VBx, overlap separation
+- **Quản lý file cục bộ** — thư viện nguồn, panel kết quả, editor transcript, export/import `.asr.json`
+- **Benchmark/calibration thiết bị** — profile hiệu năng theo thiết bị và metadata nghi ngờ ASR trong báo cáo
 
 ## Công nghệ
 
@@ -61,6 +71,7 @@
 | Resampling | SoXR (HQ/VHQ) |
 | Desktop GUI | PyQt6 (Dark/Light theme) |
 | Web backend | FastAPI, WebSocket, SQLite |
+| Offline PWA runtime | WASM, ONNX Runtime Web, WebGPU, OPFS, Cache Storage |
 | Inference | ONNX Runtime (CPU) — **không cần PyTorch / asteroid / pyannote.audio ở runtime** |
 
 ## Yêu cầu
@@ -90,9 +101,10 @@ pip install -r requirements-online.txt   # Web service (thêm)
 python app.py                            # Desktop app
 python server_gui.py                     # Web service (GUI admin)
 python server_launcher.py --no-gui       # Web service (headless)
+python -m uvicorn offline_pwa.server:app --host 0.0.0.0 --port 8444  # Offline PWA standalone dev
 ```
 
-Web service mặc định chạy HTTPS tại `https://IP:8443`. Admin mặc định: `admin` / `admin`.
+Web service mặc định chạy HTTPS tại `https://IP:8443`. Offline PWA mặc định chạy kèm tại `https://IP:8444`. Admin mặc định: `admin` / `admin`.
 
 ## Build Portable
 
@@ -104,10 +116,10 @@ python build-portable/prepare_offline_build.py
 
 # 2. Build
 python build-portable/build_portable.py         # Desktop (~1.3 GB)
-python build-portable/build_portable_online.py   # Web service (~1.7 GB)
+python build-portable/build_portable_online.py   # Web service + Offline PWA
 ```
 
-Output trong `dist/sherpa-vietnamese-asr-<version>/`. Copy folder sang máy đích, double-click `.bat` để chạy.
+Output trong `dist/sherpa-vietnamese-asr-<version>/` hoặc `dist/sherpa-vietnamese-asr-service-<version>/`. Bản service validate đủ asset runtime/model manifest của Offline PWA trước khi build xong.
 
 ## Models trên HuggingFace
 
@@ -148,6 +160,7 @@ Script export reproducible trong [`convert_onnx/`](convert_onnx/). Build script 
 │   ├── punctuation_restorer_improved.py  # Dấu câu (ViBERT + pause)
 │   ├── gec_model.py              # GEC ONNX inference
 │   ├── audio_analyzer.py         # DNSMOS quality analysis
+│   ├── audio_decode.py           # FFmpeg/SoXR decode helpers dùng chung
 │   ├── audio_preprocessing.py    # RMS normalize, preprocessing
 │   ├── hotword_context.py        # Aho-Corasick hotword boosting
 │   └── utils.py                  # Shared helpers
@@ -167,10 +180,16 @@ Script export reproducible trong [`convert_onnx/`](convert_onnx/). Build script 
 │   ├── audio_quality.py          # Audio quality (DNSMOS)
 │   ├── summarizer.py             # Meeting summarizer
 │   └── static/                   # Frontend (HTML/JS/CSS/PWA)
+├── offline_pwa/                  # Browser-side full offline PWA
+│   ├── server.py                 # Same-origin model/static host
+│   ├── config.py                 # [OfflinePWA] config
+│   ├── model_manifest.json       # Model pack manifest
+│   └── static/                   # PWA shell, workers, WASM/vendor assets
+├── shared_ui/                    # CSS/JS dùng chung web service và Offline PWA
 ├── build-portable/               # Build scripts
 ├── models/                       # AI models (tải riêng)
 ├── vocabulary/                   # Vocabulary data
-├── config.ini                    # Runtime config
+├── config.ini                    # Runtime config cục bộ, không commit
 └── hotword.txt                   # Hotword list
 ```
 
@@ -189,6 +208,8 @@ Script export reproducible trong [`convert_onnx/`](convert_onnx/). Build script 
 - [WeSpeaker](https://github.com/wenet-e2e/wespeaker) — ResNet34-LM Speaker Embedding
 - [Asteroid](https://github.com/asteroid-team/asteroid) — [JorisCos/ConvTasNet_Libri2Mix_sepclean_16k](https://huggingface.co/JorisCos/ConvTasNet_Libri2Mix_sepclean_16k) cho overlap separation (ONNX bản convert: [welcomyou/convtasnet-libri2mix-16k-onnx](https://huggingface.co/welcomyou/convtasnet-libri2mix-16k-onnx))
 - [Microsoft DNSMOS](https://github.com/microsoft/DNS-Challenge) — Audio Quality Assessment
+- [ONNX Runtime Web](https://onnxruntime.ai/) — Browser inference cho Offline PWA
+- [FFmpeg.wasm](https://ffmpegwasm.netlify.app/) và [mpg123-decoder](https://github.com/eshaz/mpg123-decoder) — Browser audio decode cho Offline PWA
 
 ### Papers
 

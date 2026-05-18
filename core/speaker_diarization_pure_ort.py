@@ -316,6 +316,15 @@ def l2_norm(x):
 
 def load_plda(model_dir):
     plda_dir = os.path.join(model_dir, "plda")
+    prepared = os.path.join(plda_dir, "plda_prepared.npz")
+    if os.path.exists(prepared):
+        p = np.load(prepared)
+        return {
+            'mean1': p["mean1"], 'mean2': p["mean2"], 'lda': p["lda"],
+            'plda_mu': p["mu"], 'plda_tr': p["plda_tr"],
+            'plda_psi': p["plda_psi"],
+        }
+
     x = np.load(os.path.join(plda_dir, "xvec_transform.npz"))
     mean1, mean2, lda = x["mean1"], x["mean2"], x["lda"]
     p = np.load(os.path.join(plda_dir, "plda.npz"))
@@ -501,7 +510,6 @@ class PureOrtDiarizer:
 
     def process(self, audio_file, progress_callback=None,
                 audio_data=None, audio_sample_rate=None):
-        import soundfile
         import time
 
         t_total = time.perf_counter()
@@ -513,9 +521,9 @@ class PureOrtDiarizer:
                 audio = audio.mean(axis=1)
             sr = audio_sample_rate or SAMPLE_RATE
         else:
-            audio, sr = soundfile.read(audio_file, dtype='float32')
-            if audio.ndim > 1:
-                audio = audio.mean(axis=1)
+            from core.audio_decode import load_audio_ffmpeg_pipe
+            audio = load_audio_ffmpeg_pipe(audio_file, SAMPLE_RATE)
+            sr = SAMPLE_RATE
         if sr != SAMPLE_RATE:
             import librosa
             audio = librosa.resample(audio, orig_sr=sr, target_sr=SAMPLE_RATE)
@@ -579,13 +587,24 @@ class PureOrtDiarizer:
         t_clust = time.perf_counter() - t0
 
         # 7. Post-clustering processing (matching pyannote exactly)
+        # Force-assign inactive speakers to throw-away cluster -2, then
+        # canonicalize arbitrary VBx cluster IDs.  Desktop ORT and ORT Web can
+        # produce identical assignments with different cluster-number
+        # permutations; top-k reconstruction has tie-breaks by cluster id, so
+        # normalize ids before diarization reconstruction.
+        inactive = np.sum(binarized, axis=1) == 0  # (num_chunks, 3)
+        hard_clusters[inactive] = -2
+        hard_clusters, cluster_remap = self._canonicalize_clusters(hard_clusters, binarized)
+        if self.speaker_centroids is not None and cluster_remap:
+            reindexed = np.zeros_like(self.speaker_centroids)
+            for old_id, new_id in cluster_remap.items():
+                if old_id < self.speaker_centroids.shape[0] and new_id < reindexed.shape[0]:
+                    reindexed[new_id] = self.speaker_centroids[old_id]
+            self.speaker_centroids = reindexed
+
         # Cap count at number of detected speakers
         num_detected = int(hard_clusters.max()) + 1
         count.data = np.minimum(count.data, num_detected).astype(np.int8)
-
-        # Force-assign inactive speakers to throw-away cluster -2
-        inactive = np.sum(binarized, axis=1) == 0  # (num_chunks, 3)
-        hard_clusters[inactive] = -2
 
         # For exclusive diarization: cap count at 1
         count.data = np.minimum(count.data, 1).astype(np.int8)
@@ -815,6 +834,29 @@ class PureOrtDiarizer:
         del all_raw_frames, io_binding  # giải phóng
 
         return embeddings
+
+    def _canonicalize_clusters(self, hard_clusters, activities):
+        """Relabel cluster IDs by first active (chunk, frame, local speaker).
+
+        VBx cluster IDs are arbitrary.  This makes reconstruction deterministic
+        across numerically equivalent backends whose labels are permuted.
+        """
+        output = np.full_like(hard_clusters, -2)
+        cluster_ids = sorted(int(k) for k in np.unique(hard_clusters) if k >= 0)
+        keys = []
+        for cluster_id in cluster_ids:
+            first = (10**9, 10**9, 10**9)
+            for c, s in np.argwhere(hard_clusters == cluster_id):
+                active_frames = np.flatnonzero(activities[c, :, s] > 0)
+                if active_frames.size:
+                    candidate = (int(c), int(active_frames[0]), int(s))
+                    if candidate < first:
+                        first = candidate
+            keys.append((first, cluster_id))
+        remap = {old_id: new_id for new_id, (_, old_id) in enumerate(sorted(keys))}
+        for old_id, new_id in remap.items():
+            output[hard_clusters == old_id] = new_id
+        return output, remap
 
     def _cluster(self, all_embeddings, train_mask, segmentations,
                   max_clusters=None):

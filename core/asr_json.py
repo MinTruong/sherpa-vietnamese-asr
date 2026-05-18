@@ -73,6 +73,16 @@ def serialize_segments(segments, speaker_name_mapping=None, speaker_colors=None,
             raw_words_data = []
             for w in seg['raw_words']:
                 wd = {'text': w.get('text', '')}
+                if 'start' in w:
+                    try:
+                        wd['start'] = round(float(w.get('start', 0)), 3)
+                    except (TypeError, ValueError):
+                        pass
+                if 'end' in w:
+                    try:
+                        wd['end'] = round(float(w.get('end', 0)), 3)
+                    except (TypeError, ValueError):
+                        pass
                 if w.get('gap_after_ms'):
                     wd['gap_after_ms'] = w['gap_after_ms']
                 if w.get('gap_before_ms'):
@@ -203,6 +213,9 @@ def deserialize_segments(data):
                     'text': internal_seg['text'],
                     'timestamp': internal_seg['end']
                 }]
+
+            if seg.get('raw_words'):
+                internal_seg['raw_words'] = list(seg.get('raw_words', []))
 
             segments.append(internal_seg)
             seg_counter += 1
