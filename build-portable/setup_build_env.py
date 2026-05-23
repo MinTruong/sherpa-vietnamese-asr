@@ -6,7 +6,13 @@ Usage: python build-portable/setup_build_env.py
 import subprocess
 import sys
 import os
+import io
 from pathlib import Path
+
+if sys.stdout and hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+if sys.stderr and hasattr(sys.stderr, "buffer"):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 
 # Get project root (parent of build-portable directory)
 SCRIPT_DIR = Path(__file__).parent.absolute()

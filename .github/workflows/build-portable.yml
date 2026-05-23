@@ -18,6 +18,14 @@ on:
         default: true
         type: boolean
 
+permissions:
+  contents: write
+
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: "1"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     runs-on: windows-latest
@@ -74,6 +82,22 @@ jobs:
             $zip = Join-Path artifacts ($_.Name + ".zip")
             Compress-Archive -Path (Join-Path $_.FullName "*") -DestinationPath $zip -Force
           }
+
+      - name: Resolve release tag
+        shell: pwsh
+        run: |
+          $tag = git describe --tags --abbrev=0 --match "v*"
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Sherpa Vietnamese ASR ${{ env.RELEASE_TAG }}
+          files: artifacts/*.zip
+          fail_on_unmatched_files: true
+          make_latest: true
+          overwrite_files: true
 
       - name: Upload portable artifacts
         uses: actions/upload-artifact@v4
