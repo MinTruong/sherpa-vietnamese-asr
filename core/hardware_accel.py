@@ -11,6 +11,7 @@ import os
 import platform
 import site
 import subprocess
+import sys
 from pathlib import Path
 from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -22,6 +23,104 @@ OPENVINO_PROVIDER = "OpenVINOExecutionProvider"
 DML_PROVIDER = "DmlExecutionProvider"
 ROCM_PROVIDER = "ROCMExecutionProvider"
 _DLL_DIR_HANDLES: List[Any] = []
+
+GPU_ADDON_DEFS: Dict[str, Dict[str, str]] = {
+    "nvidia-cuda": {
+        "artifact": "gpu-addon-nvidia-cuda-win64",
+        "provider": CUDA_PROVIDER,
+        "label": "NVIDIA CUDA",
+    },
+    "directml": {
+        "artifact": "gpu-addon-directml-win64",
+        "provider": DML_PROVIDER,
+        "label": "DirectML",
+    },
+    "intel-openvino": {
+        "artifact": "gpu-addon-intel-openvino-win64",
+        "provider": OPENVINO_PROVIDER,
+        "label": "Intel OpenVINO",
+    },
+}
+
+
+def project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def gpu_addon_site_packages(addon_id: str) -> Path:
+    return project_root() / "gpu_addons" / addon_id / "Lib" / "site-packages"
+
+
+def installed_gpu_addons() -> List[Dict[str, Any]]:
+    addons: List[Dict[str, Any]] = []
+    for addon_id, meta in GPU_ADDON_DEFS.items():
+        site_dir = gpu_addon_site_packages(addon_id)
+        addons.append(
+            {
+                "id": addon_id,
+                "label": meta["label"],
+                "artifact": meta["artifact"],
+                "provider": meta["provider"],
+                "installed": (site_dir / "onnxruntime").is_dir(),
+                "site_packages": str(site_dir),
+            }
+        )
+    return addons
+
+
+def recommended_gpu_addon() -> Optional[Dict[str, Any]]:
+    nvidia = detect_nvidia_gpus()
+    controllers = detect_windows_video_controllers()
+    vendors = {g.get("vendor") for g in controllers}
+    if nvidia:
+        addon_id = "nvidia-cuda"
+    elif "intel" in vendors:
+        addon_id = "intel-openvino"
+    elif "amd" in vendors:
+        addon_id = "directml"
+    elif controllers:
+        addon_id = "directml"
+    else:
+        return None
+
+    meta = dict(GPU_ADDON_DEFS[addon_id])
+    meta["id"] = addon_id
+    meta["zip_name"] = f"{meta['artifact']}-<version>.zip"
+    meta["installed"] = (gpu_addon_site_packages(addon_id) / "onnxruntime").is_dir()
+    return meta
+
+
+@lru_cache(maxsize=1)
+def configure_gpu_addon_paths() -> List[str]:
+    """Prepend installed GPU add-on site-packages before importing ORT."""
+    recommendation = recommended_gpu_addon()
+    preferred_ids: List[str] = []
+    if recommendation:
+        preferred_ids.append(recommendation["id"])
+    preferred_ids.extend([aid for aid in GPU_ADDON_DEFS if aid not in preferred_ids])
+
+    added: List[str] = []
+    for addon_id in preferred_ids:
+        site_dir = gpu_addon_site_packages(addon_id)
+        if not (site_dir / "onnxruntime").is_dir():
+            continue
+        text = str(site_dir)
+        if text not in sys.path:
+            sys.path.insert(0, text)
+        if platform.system().lower() == "windows":
+            dll_dirs = [site_dir, site_dir / "onnxruntime" / "capi"]
+            for dll_dir in dll_dirs:
+                if not dll_dir.exists():
+                    continue
+                dll_text = str(dll_dir)
+                os.environ["PATH"] = dll_text + os.pathsep + os.environ.get("PATH", "")
+                if hasattr(os, "add_dll_directory"):
+                    try:
+                        _DLL_DIR_HANDLES.append(os.add_dll_directory(dll_text))
+                    except Exception:
+                        pass
+        added.append(text)
+    return added
 
 
 def _run_text(cmd: Sequence[str], timeout: float = 4.0) -> str:
@@ -129,6 +228,7 @@ def ort_available_providers(ort_module=None) -> List[str]:
     try:
         ort = ort_module
         if ort is None:
+            configure_gpu_addon_paths()
             import onnxruntime as ort  # type: ignore
         return list(ort.get_available_providers())
     except Exception:
@@ -142,7 +242,9 @@ def preload_ort_cuda_dlls() -> Dict[str, Any]:
     errors: List[str] = []
 
     if platform.system().lower() == "windows" and hasattr(os, "add_dll_directory"):
-        for root in site.getsitepackages():
+        roots = list(site.getsitepackages())
+        roots.extend(configure_gpu_addon_paths())
+        for root in roots:
             nvidia_root = Path(root) / "nvidia"
             if not nvidia_root.exists():
                 continue

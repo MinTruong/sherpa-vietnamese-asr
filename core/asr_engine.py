@@ -687,6 +687,8 @@ def get_ort():
     """Lazy import onnxruntime."""
     global _ort_module
     if _ort_module is None:
+        from core.hardware_accel import configure_gpu_addon_paths
+        configure_gpu_addon_paths()
         import onnxruntime as ort_mod
         ort_mod.set_default_logger_severity(3)
         _ort_module = ort_mod

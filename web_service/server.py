@@ -430,7 +430,7 @@ async def calibration_status():
 async def calibration_run(request: Request):
     """Run opt-in 10 minute device calibration and persist the selected provider."""
     if queue_manager.is_processing:
-        raise HTTPException(409, "Đang xử lý file khác. Vui lòng đợi xong rồi chạy Calibration.")
+        raise HTTPException(409, "Đang xử lý file khác. Vui lòng đợi xong rồi chạy tối ưu thiết bị.")
 
     try:
         body = await request.json()

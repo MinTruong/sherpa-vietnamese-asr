@@ -21,9 +21,11 @@ from core.hardware_accel import (
     create_ort_session,
     detect_hardware,
     hardware_summary,
+    installed_gpu_addons,
     is_gpu_provider,
     ort_provider_request,
     preferred_gpu_provider,
+    recommended_gpu_addon,
 )
 
 
@@ -173,6 +175,8 @@ def detect_calibration_status() -> Dict[str, Any]:
         "provider_ready": provider_ready,
         "can_optimize": bool(gpus and provider and provider_ready),
         "reason": reason,
+        "recommended_addon": recommended_gpu_addon(),
+        "installed_addons": installed_gpu_addons(),
         "light_probe": light_probe,
         "sample_file": str(CALIBRATION_SAMPLE_MP3),
         "sample_available": CALIBRATION_SAMPLE_MP3.exists() or CALIBRATION_SAMPLE_WAV.exists(),

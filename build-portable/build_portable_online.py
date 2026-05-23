@@ -39,7 +39,7 @@ from core.version import get_version_short
 _VERSION = get_version_short()
 
 # Override output directory
-DIST_DIR_ONLINE = PROJECT_ROOT / "dist" / f"sherpa-vietnamese-asr-service-{_VERSION}"
+DIST_DIR_ONLINE = PROJECT_ROOT / "dist" / f"server-portable-cpu-{_VERSION}"
 
 # Source files cho ban online (KHONG co tab_live, streaming)
 ONLINE_SOURCE_FILES = [
@@ -73,6 +73,10 @@ BUNDLED_MODEL_ROOT_FILES_ONLINE = set()
 # Packages khong can cho web service (giam dung luong)
 EXCLUDE_PACKAGES_SERVICES = {
     'moonshine_voice',
+    'nvidia', 'nvidia_cublas_cu12', 'nvidia_cuda_nvrtc_cu12',
+    'nvidia_cuda_runtime_cu12', 'nvidia_cudnn_cu12',
+    'nvidia_cufft_cu12', 'nvidia_curand_cu12', 'nvidia_nvjitlink_cu12',
+    'onnxruntime_gpu',
 
     # === PyTorch + ecosystem — app uses ONNX Runtime only ===
     'torch', 'torchaudio', 'torio', 'torchmetrics', 'torchgen',
@@ -198,9 +202,17 @@ def copy_venv_packages_services():
 
     # Clean .pth files that cause issues
     for pth in dst_site.glob("*pywin32*.pth"):
-        pth.unlink()
+        try:
+            pth.chmod(0o666)
+            pth.unlink()
+        except PermissionError:
+            pth.write_text("", encoding="utf-8")
     for pth in dst_site.glob("*distutils-precedence*.pth"):
-        pth.unlink()
+        try:
+            pth.chmod(0o666)
+            pth.unlink()
+        except PermissionError:
+            pth.write_text("", encoding="utf-8")
 
     # Clean CUDA DLLs from llama_cpp (server is CPU only, saves ~300MB)
     llama_lib = dst_site / "llama_cpp" / "lib"

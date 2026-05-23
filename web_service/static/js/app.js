@@ -479,6 +479,16 @@ async function runServerCalibration() {
         if (!status.can_optimize) {
             window.appConfig.execution_provider = 'cpu';
             updateCalibrationStatus('cpu');
+            const addon = status.recommended_addon || null;
+            if (addon && !addon.installed && !status.provider_ready) {
+                alert(
+                    'Phát hiện GPU nhưng chưa có gói tăng tốc phù hợp.\n\n' +
+                    calibrationHardwareText(status) +
+                    `\n\nHãy tải: ${addon.zip_name || (addon.artifact + '-<version>.zip')}` +
+                    '\nGiải nén gói này vào thư mục portable, rồi mở lại ứng dụng và bấm Tối ưu thiết bị.'
+                );
+                return;
+            }
             alert('Không tìm thấy GPU/provider phù hợp. Cấu hình hiện tại đã tối ưu ở chế độ CPU-only.\n\n' + calibrationHardwareText(status));
             return;
         }
@@ -494,7 +504,7 @@ async function runServerCalibration() {
             return;
         }
 
-        if (statusEl) statusEl.textContent = 'Đang chạy Calibration bằng file mẫu 10 phút...';
+        if (statusEl) statusEl.textContent = 'Đang tối ưu bằng file mẫu 10 phút...';
         const report = await apiFetch('/api/calibration/run', {
             method: 'POST',
             body: JSON.stringify({
@@ -510,16 +520,16 @@ async function runServerCalibration() {
         const cmp = report.comparison || {};
         const stages = cmp.stage_speedups || {};
         alert(
-            `Calibration hoàn tất. Cấu hình được chọn: ${selected === 'auto' ? 'GPU auto' : 'CPU-only'}\n` +
+            `Tối ưu hoàn tất. Cấu hình được chọn: ${selected === 'auto' ? 'GPU auto' : 'CPU-only'}\n` +
             `Tổng tăng tốc: ${cmp.wall_speedup || 'N/A'}x\n` +
             `ASR: ${stages.transcription_detail || 'N/A'}x, ` +
             `Diarization: ${stages.diarization || 'N/A'}x, ` +
             `Thêm dấu: ${stages.punctuation || 'N/A'}x\n` +
-            `Parity: ${cmp.parity_ok ? 'OK' : 'không đạt, giữ CPU'}`
+            `Kiểm tra khớp: ${cmp.parity_ok ? 'OK' : 'không đạt, giữ CPU'}`
         );
     } catch (e) {
         updateCalibrationStatus(window.appConfig?.execution_provider || 'cpu');
-        showToast('Calibration thất bại: ' + e.message, 'error');
+        showToast('Tối ưu thiết bị thất bại: ' + e.message, 'error');
     } finally {
         if (btn) btn.disabled = false;
     }

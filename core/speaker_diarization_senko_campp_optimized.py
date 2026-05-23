@@ -343,6 +343,8 @@ class SenkoCamppDiarizerOptimized:
 
     def initialize(self):
         """Load CAM++ 192-dim ONNX + pyannote segmentation ONNX."""
+        from core.hardware_accel import configure_gpu_addon_paths
+        configure_gpu_addon_paths()
         import onnxruntime as ort
         ort.set_default_logger_severity(3)
 

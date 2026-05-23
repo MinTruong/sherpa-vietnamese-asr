@@ -415,6 +415,8 @@ class PureOrtDiarizer:
         self._last_overlap_regions = []
 
     def initialize(self):
+        from core.hardware_accel import configure_gpu_addon_paths
+        configure_gpu_addon_paths()
         import onnxruntime as ort
         ort.set_default_logger_severity(3)
         from core.config import compute_ort_threads

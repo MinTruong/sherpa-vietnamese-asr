@@ -152,6 +152,8 @@ class AudioQualityAnalyzer:
         """Load DNSMOS ONNX model"""
         if self._dnsmos_session is None:
             try:
+                from core.hardware_accel import configure_gpu_addon_paths
+                configure_gpu_addon_paths()
                 import onnxruntime as ort
                 model_path = os.path.join(DNSMOS_DIR, DNSMOS_MODEL_NAME)
                 

@@ -10,6 +10,8 @@ from time import time
 from typing import List, Union
 
 import numpy as np
+from core.hardware_accel import configure_gpu_addon_paths
+configure_gpu_addon_paths()
 import onnxruntime as ort
 from transformers import AutoTokenizer
 from core.vocabulary import Vocabulary

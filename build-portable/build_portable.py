@@ -26,7 +26,7 @@ _VERSION = get_version_short()
 
 # Configuration
 VENV_DIR = PROJECT_ROOT / ".envtietkiem"
-DIST_DIR = PROJECT_ROOT / "dist" / f"sherpa-vietnamese-asr-{_VERSION}"
+DIST_DIR = PROJECT_ROOT / "dist" / f"desktop-portable-cpu-{_VERSION}"
 BUILD_DIR = PROJECT_ROOT / "build"
 PYTHON_EMBED_URL = "https://www.python.org/ftp/python/3.12.0/python-3.12.0-embed-amd64.zip"
 # A08: SHA-256 pin cho Python embedded — supply chain defense-in-depth
@@ -214,6 +214,10 @@ def copy_venv_packages():
     # Packages to exclude (desktop doesn't need web service packages or unused deps)
     EXCLUDE_PACKAGES = {
         'moonshine_voice',
+        'nvidia', 'nvidia_cublas_cu12', 'nvidia_cuda_nvrtc_cu12',
+        'nvidia_cuda_runtime_cu12', 'nvidia_cudnn_cu12',
+        'nvidia_cufft_cu12', 'nvidia_curand_cu12', 'nvidia_nvjitlink_cu12',
+        'onnxruntime_gpu',
 
         # === PyTorch + ecosystem (~1,340 MB) — app uses ONNX Runtime only ===
         'torch', 'torchaudio', 'torio', 'torchmetrics', 'torchgen',
@@ -529,6 +533,15 @@ def copy_dlls():
     dst_python = DIST_DIR / "python"
     dst_site = dst_python / "Lib" / "site-packages"
 
+    def _rmtree_force(path):
+        def on_rm_error(func, bad_path, exc_info):
+            try:
+                os.chmod(bad_path, stat.S_IWRITE)
+            except Exception:
+                pass
+            func(bad_path)
+        shutil.rmtree(path, onerror=on_rm_error)
+
     # Copy .libs folders (skip those belonging to excluded packages)
     for libs_dir in venv_site.rglob("*.libs"):
         # e.g. av.libs -> check "av" against exclude list
@@ -539,7 +552,8 @@ def copy_dlls():
             continue
         dst_libs = dst_site / libs_dir.relative_to(venv_site)
         if dst_libs.exists():
-            shutil.rmtree(dst_libs)
+            print(f"  [SKIP] {libs_dir.name} (already copied)")
+            continue
         shutil.copytree(libs_dir, dst_libs)
     
     # Copy numpy DLLs
@@ -561,6 +575,10 @@ def copy_dlls():
     if ort_capi.exists():
         copied_ort = 0
         for dll in sorted(ort_capi.glob("onnxruntime*.dll")):
+            lower = dll.name.lower()
+            if lower not in {"onnxruntime.dll", "onnxruntime_providers_shared.dll"}:
+                print(f"  [SKIP] {dll.name} (GPU add-on DLL)")
+                continue
             shutil.copy2(dll, dst_python)
             copied_ort += 1
         if copied_ort:

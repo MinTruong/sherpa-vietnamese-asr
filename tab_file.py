@@ -426,9 +426,9 @@ class FileProcessingTab(QWidget):
         threads_layout.addWidget(self.label_threads)
         form_config.addRow("Số luồng CPU:", threads_layout)
         
-        self.btn_device_calibration = QPushButton("Calibration")
+        self.btn_device_calibration = QPushButton("Tối ưu thiết bị")
         self.btn_device_calibration.setToolTip(
-            "Kiểm tra GPU và chạy file mẫu 10 phút để tối ưu cấu hình tăng tốc phần cứng."
+            "Kiểm tra CPU/GPU và chạy file mẫu 10 phút để tối ưu tốc độ xử lý."
         )
         self.btn_device_calibration.setStyleSheet(f"""
             QPushButton {{
@@ -1499,7 +1499,7 @@ class FileProcessingTab(QWidget):
 
     def start_device_calibration_detect(self):
         if self.transcriber and self.transcriber.isRunning():
-            QMessageBox.information(self, "Calibration", "Đang xử lý file. Vui lòng đợi xong rồi chạy Calibration.")
+            QMessageBox.information(self, "Tối ưu thiết bị", "Đang xử lý file. Vui lòng đợi xong rồi chạy tối ưu thiết bị.")
             return
         self.btn_device_calibration.setEnabled(False)
         self.label_device_accel.setText("Đang kiểm tra phần cứng...")
@@ -1527,16 +1527,30 @@ class FileProcessingTab(QWidget):
             self.btn_device_calibration.setEnabled(True)
             QMessageBox.information(
                 self,
-                "Calibration",
+                "Tối ưu thiết bị",
                 "Không tìm thấy GPU/provider phù hợp. Cấu hình hiện tại đã tối ưu ở chế độ CPU-only.\n\n"
                 + self._hardware_message(status),
+            )
+            return
+
+        addon = status.get("recommended_addon") or {}
+        if addon and not addon.get("installed") and not status.get("provider_ready"):
+            self._set_execution_provider("cpu")
+            self.btn_device_calibration.setEnabled(True)
+            QMessageBox.information(
+                self,
+                "Tối ưu thiết bị",
+                "Phát hiện GPU nhưng chưa có gói tăng tốc phù hợp.\n\n"
+                + self._hardware_message(status)
+                + f"\n\nHãy tải: {addon.get('zip_name') or addon.get('artifact') + '-<version>.zip'}"
+                + "\nGiải nén gói này vào thư mục portable, rồi mở lại ứng dụng và bấm Tối ưu thiết bị.",
             )
             return
 
         provider = status.get("preferred_provider", "GPU")
         reply = QMessageBox.question(
             self,
-            "Calibration",
+            "Tối ưu thiết bị",
             "Phát hiện GPU có thể tăng tốc.\n\n"
             + self._hardware_message(status)
             + f"\nProvider đề xuất: {provider}\n\n"
@@ -1552,7 +1566,7 @@ class FileProcessingTab(QWidget):
 
     def start_device_calibration_run(self):
         self.btn_device_calibration.setEnabled(False)
-        self.label_device_accel.setText("Calibration 0%")
+        self.label_device_accel.setText("Tối ưu 0%")
         self._device_calibration_thread = DeviceCalibrationThread(
             "run",
             model_name=self.combo_model.currentData(),
@@ -1576,7 +1590,7 @@ class FileProcessingTab(QWidget):
         if report.get("status") == "no_gpu":
             QMessageBox.information(
                 self,
-                "Calibration",
+                "Tối ưu thiết bị",
                 "Không tìm thấy GPU/provider phù hợp. Đã giữ CPU-only.\n\n"
                 + self._hardware_message(report.get("detect") or {}),
             )
@@ -1589,19 +1603,19 @@ class FileProcessingTab(QWidget):
         self.label_device_accel.setText(provider_text)
         QMessageBox.information(
             self,
-            "Calibration",
-            f"Calibration hoàn tất. Cấu hình được chọn: {provider_text}\n"
+            "Tối ưu thiết bị",
+            f"Tối ưu hoàn tất. Cấu hình được chọn: {provider_text}\n"
             f"Tổng tăng tốc: {speedup or 'N/A'}x\n"
             f"ASR: {stage_speedups.get('transcription_detail', 'N/A')}x, "
             f"Diarization: {stage_speedups.get('diarization', 'N/A')}x, "
             f"Thêm dấu: {stage_speedups.get('punctuation', 'N/A')}x\n"
-            f"Parity: {'OK' if comparison.get('parity_ok') else 'không đạt, giữ CPU'}",
+            f"Kiểm tra khớp: {'OK' if comparison.get('parity_ok') else 'không đạt, giữ CPU'}",
         )
 
     def _on_device_calibration_error(self, message):
         self.btn_device_calibration.setEnabled(True)
         self.label_device_accel.setText("CPU-only")
-        QMessageBox.warning(self, "Calibration", f"Calibration thất bại:\n{message}")
+        QMessageBox.warning(self, "Tối ưu thiết bị", f"Tối ưu thiết bị thất bại:\n{message}")
 
     def _on_save_ram_changed(self, state):
         """Cảnh báo khi tắt tiết kiệm RAM trên máy ≤ 8GB."""
