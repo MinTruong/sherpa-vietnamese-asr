@@ -127,8 +127,17 @@ jobs:
             }
             Remove-Item -LiteralPath $source.FullName -Force
           }
+          function Get-ArtifactName($DirName) {
+            if ($DirName -match '^desktop-portable-cpu-(.+)$') {
+              return "sherpa-vietnamese-asr-$($Matches[1]).zip"
+            }
+            if ($DirName -match '^server-portable-cpu-(.+)$') {
+              return "sherpa-vietnamese-asr-service-$($Matches[1]).zip"
+            }
+            return "$DirName.zip"
+          }
           Get-ChildItem -Path dist -Directory | ForEach-Object {
-            $zip = Join-Path artifacts ($_.Name + ".zip")
+            $zip = Join-Path artifacts (Get-ArtifactName $_.Name)
             Compress-Archive -Path (Join-Path $_.FullName "*") -DestinationPath $zip -Force
             Split-LargeFile -Path $zip
           }
@@ -138,6 +147,26 @@ jobs:
             copy /b bundle.zip.001+bundle.zip.002+bundle.zip.003 bundle.zip
           Use all parts for the same bundle name, in numeric order.
           "@ | Set-Content -Encoding UTF8 -Path artifacts/README-recombine.txt
+
+      - name: Remove old renamed release assets
+        if: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '') }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
+        run: |
+          $version = $env:RELEASE_TAG -replace '^v', ''
+          $oldAssets = @(
+            "desktop-portable-cpu-$version.zip",
+            "server-portable-cpu-$version.zip"
+          )
+          foreach ($asset in $oldAssets) {
+            gh release delete-asset $env:RELEASE_TAG $asset --yes
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "No existing release asset to delete: $asset"
+              $global:LASTEXITCODE = 0
+            }
+          }
 
       - name: Publish GitHub release
         if: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '') }}
