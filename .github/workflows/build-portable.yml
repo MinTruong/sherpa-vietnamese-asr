@@ -86,10 +86,48 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
+          $maxPartBytes = 1900MB
+          $bufferBytes = 8MB
+          function Split-LargeFile($Path) {
+            $source = Get-Item -LiteralPath $Path
+            if ($source.Length -lt $maxPartBytes) { return }
+            $buffer = New-Object byte[] $bufferBytes
+            $inputStream = [System.IO.File]::OpenRead($source.FullName)
+            try {
+              $part = 1
+              while ($inputStream.Position -lt $inputStream.Length) {
+                $partPath = "{0}.{1:D3}" -f $source.FullName, $part
+                $outputStream = [System.IO.File]::Create($partPath)
+                try {
+                  $written = 0
+                  while ($written -lt $maxPartBytes) {
+                    $toRead = [int][Math]::Min($buffer.Length, $maxPartBytes - $written)
+                    $read = $inputStream.Read($buffer, 0, $toRead)
+                    if ($read -le 0) { break }
+                    $outputStream.Write($buffer, 0, $read)
+                    $written += $read
+                  }
+                } finally {
+                  $outputStream.Dispose()
+                }
+                $part += 1
+              }
+            } finally {
+              $inputStream.Dispose()
+            }
+            Remove-Item -LiteralPath $source.FullName -Force
+          }
           Get-ChildItem -Path dist -Directory | ForEach-Object {
             $zip = Join-Path artifacts ($_.Name + ".zip")
             Compress-Archive -Path (Join-Path $_.FullName "*") -DestinationPath $zip -Force
+            Split-LargeFile -Path $zip
           }
+          @"
+          Large archives are split at 1900MB to stay below GitHub's per-asset limit.
+          To reconstruct on Windows:
+            copy /b bundle.zip.001+bundle.zip.002+bundle.zip.003 bundle.zip
+          Use all parts for the same bundle name, in numeric order.
+          "@ | Set-Content -Encoding UTF8 -Path artifacts/README-recombine.txt
 
       - name: Publish GitHub release
         if: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '') }}
