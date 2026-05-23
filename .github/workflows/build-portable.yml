@@ -62,7 +62,7 @@ jobs:
         shell: pwsh
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: python build-portable/prepare_offline_build.py
+        run: .\.envtietkiem\Scripts\python.exe build-portable/prepare_offline_build.py
 
       - name: Build desktop portable
         if: ${{ inputs.bundle == 'both' || inputs.bundle == 'desktop' }}
