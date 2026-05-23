@@ -448,6 +448,107 @@ def copy_models_online():
     print(f"[OK] Models copied: {count} files")
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _generate_bpe_vocab(model_dir: Path) -> None:
+    bpe_model = model_dir / "bpe.model"
+    bpe_vocab = model_dir / "bpe.vocab"
+    if bpe_vocab.exists() or not bpe_model.exists():
+        return
+
+    import sentencepiece as spm
+
+    processor = spm.SentencePieceProcessor(model_file=str(bpe_model))
+    eol = "\r\n"
+    lines = [
+        f"{processor.IdToPiece(index)}\t{processor.GetScore(index)}"
+        for index in range(processor.GetPieceSize())
+    ]
+    bpe_vocab.write_bytes((eol.join(lines) + eol).encode("utf-8"))
+    print(f"  [GEN] {bpe_vocab.relative_to(DIST_DIR_ONLINE)}")
+
+
+def _generate_plda_prepared(model_dir: Path) -> None:
+    plda_dir = model_dir / "plda"
+    target = plda_dir / "plda_prepared.npz"
+    if target.exists():
+        return
+    plda_path = plda_dir / "plda.npz"
+    xvec_path = plda_dir / "xvec_transform.npz"
+    if not plda_path.exists() or not xvec_path.exists():
+        return
+
+    import numpy as np
+    from scipy.linalg import eigh
+
+    xvec = np.load(xvec_path)
+    plda = np.load(plda_path)
+    mean1, mean2, lda = xvec["mean1"], xvec["mean2"], xvec["lda"]
+    mu, tr, psi = plda["mu"], plda["tr"], plda["psi"]
+    w_matrix = np.linalg.inv(tr.T @ tr)
+    b_matrix = np.linalg.inv((tr.T / psi) @ tr)
+    acvar, wccn = eigh(b_matrix, w_matrix)
+
+    np.savez(
+        target,
+        mean1=mean1,
+        mean2=mean2,
+        lda=lda,
+        mu=mu,
+        plda_tr=wccn.T[::-1],
+        plda_psi=acvar[::-1],
+    )
+    print(f"  [GEN] {target.relative_to(DIST_DIR_ONLINE)}")
+
+
+def refresh_generated_model_manifest_metadata(file_ids: set[str]) -> None:
+    manifest_path = DIST_DIR_ONLINE / "offline_pwa" / "model_manifest.json"
+    if not manifest_path.exists():
+        return
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    changed = False
+    for pack in manifest.get("packs", []):
+        for item in pack.get("files", []):
+            if item.get("id") not in file_ids:
+                continue
+            rel_path = item.get("local_path") or item.get("target_path")
+            if not rel_path:
+                continue
+            path = DIST_DIR_ONLINE / rel_path
+            if not path.is_file():
+                continue
+            item["bytes"] = path.stat().st_size
+            item["sha256"] = _sha256_file(path)
+            changed = True
+
+    if changed:
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print("  [OK] Refreshed generated model metadata in offline_pwa/model_manifest.json")
+
+
+def ensure_offline_pwa_generated_model_assets():
+    print("[PWA] Ensuring generated model assets...")
+    models_root = DIST_DIR_ONLINE / "models"
+    _generate_bpe_vocab(models_root / "zipformer-30m-rnnt-6000h")
+    _generate_bpe_vocab(models_root / "sherpa-onnx-zipformer-vi-2025-04-20")
+    _generate_plda_prepared(models_root / "pyannote" / "speaker-diarization-community-1")
+    refresh_generated_model_manifest_metadata({
+        "asr30.bpe_vocab",
+        "asr68.bpe_vocab",
+        "speaker.pyannote_plda_prepared",
+    })
+
+
 def validate_offline_pwa_model_bundle():
     """Fail the server build if the PWA manifest references missing local models."""
     manifest_path = DIST_DIR_ONLINE / "offline_pwa" / "model_manifest.json"
@@ -765,6 +866,7 @@ def main():
             opt_file.unlink()
             print(f"  [DEL] {opt_file.relative_to(DIST_DIR_ONLINE)} (ORT cache, auto-generated on target)")
 
+        ensure_offline_pwa_generated_model_assets()
         validate_offline_pwa_model_bundle()
         validate_offline_pwa_static_bundle()
 

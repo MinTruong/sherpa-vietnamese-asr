@@ -63,11 +63,13 @@ MODELS_CONFIG = {
         "revision": "0fc3fea3ccd9c50b439755fa8a6aba546cb3a7d4",
         "integrity_files": {
             "bpe.model": "289dbb44527c13c419ae3a4d8ce6a349f01a97f8777e69934a77e3692d2f10db",
+            "bpe.vocab": "897e0c58b262e59ad0b4ad6aedf50d6c309b2724b7db32a1f72ee978cec5b794",
             "decoder-epoch-12-avg-8.onnx": "d1d27cca84c824a8acf5ce6edf0f2c0880cfe295d2e69b95134de1707e1d9998",
             "encoder-epoch-12-avg-8.onnx": "d56645616305ceee63a1fa63a4da32e688130e937e67b11f69adf79712377717",
             "joiner-epoch-12-avg-8.onnx": "a186d4ddf04cac3ddfb095dc6e7f705dcd08bd79d4c67334f43c3a7337bf8d9a",
             "tokens.txt": "f536d03c2e95ebd2930cf0abec88e823bd17d3c1933da7ae6a82db3b80605e15",
         },
+        "generated_sentencepiece_files": ["bpe.vocab"],
     },
     
     # NLP Models
@@ -134,6 +136,7 @@ MODELS_CONFIG = {
             "plda/xvec_transform.npz": "325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f",
             "segmentation/pytorch_model.bin": "7ad24338d844fb95985486eb1a464e32d229f6d7a03c9abe60f978bacf3f816e",
         },
+        "generated_plda_prepared": "plda/plda_prepared.npz",
     },
     "pyannote_segmentation_3.0": {
         "type": "huggingface",
@@ -332,6 +335,49 @@ def _generate_sentencepiece_artifacts(model_id: str, base_dir: Path, config: dic
         write_if_needed("bpe.vocab", eol.join(vocab_lines) + eol)
 
 
+def _generate_plda_prepared(model_id: str, base_dir: Path, config: dict) -> None:
+    relative_path = config.get("generated_plda_prepared")
+    if not relative_path:
+        return
+
+    target_path = _resolve_under(base_dir, relative_path)
+    if target_path.exists():
+        return
+
+    try:
+        import numpy as np
+        from scipy.linalg import eigh
+    except ImportError as exc:
+        raise RuntimeError(
+            f"KhÃ´ng thá»ƒ sinh PLDA prepared cho {model_id}: chÆ°a cÃ i numpy/scipy"
+        ) from exc
+
+    plda_dir = target_path.parent
+    xvec_path = plda_dir / "xvec_transform.npz"
+    plda_path = plda_dir / "plda.npz"
+    if not xvec_path.exists() or not plda_path.exists():
+        return
+
+    xvec = np.load(xvec_path)
+    plda = np.load(plda_path)
+    mean1, mean2, lda = xvec["mean1"], xvec["mean2"], xvec["lda"]
+    mu, tr, psi = plda["mu"], plda["tr"], plda["psi"]
+    w_matrix = np.linalg.inv(tr.T @ tr)
+    b_matrix = np.linalg.inv((tr.T / psi) @ tr)
+    acvar, wccn = eigh(b_matrix, w_matrix)
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        target_path,
+        mean1=mean1,
+        mean2=mean2,
+        lda=lda,
+        mu=mu,
+        plda_tr=wccn.T[::-1],
+        plda_psi=acvar[::-1],
+    )
+
+
 def _verify_existing_model(model_id: str, config: dict, models_dir: Path) -> None:
     base_dir = models_dir / config["local_dir"]
     check_path = _resolve_under(base_dir, config["check_file"])
@@ -339,6 +385,7 @@ def _verify_existing_model(model_id: str, config: dict, models_dir: Path) -> Non
     if config["type"] == "huggingface":
         _require_security_keys(model_id, config, "integrity_files")
         _generate_sentencepiece_artifacts(model_id, base_dir, config)
+        _generate_plda_prepared(model_id, base_dir, config)
         _verify_integrity_files(model_id, base_dir, config["integrity_files"])
     elif config["type"] in {"huggingface_file", "direct_download", "manual_local"}:
         _require_security_keys(model_id, config, "sha256")
@@ -387,6 +434,7 @@ def download_huggingface_model(model_id: str) -> bool:
             allow_patterns=sorted(config["integrity_files"].keys()),
         )
         _generate_sentencepiece_artifacts(model_id, local_path, config)
+        _generate_plda_prepared(model_id, local_path, config)
         _verify_integrity_files(model_id, local_path, config["integrity_files"])
         print(f"✅ Đã tải xong {model_id}")
         return True
