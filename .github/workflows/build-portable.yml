@@ -98,9 +98,11 @@ jobs:
           New-Item -ItemType Directory -Force artifacts | Out-Null
           $maxPartBytes = 1900MB
           $bufferBytes = 8MB
+          $script:SplitArtifactsCreated = $false
           function Split-LargeFile($Path) {
             $source = Get-Item -LiteralPath $Path
             if ($source.Length -lt $maxPartBytes) { return }
+            $script:SplitArtifactsCreated = $true
             $buffer = New-Object byte[] $bufferBytes
             $inputStream = [System.IO.File]::OpenRead($source.FullName)
             try {
@@ -141,12 +143,14 @@ jobs:
             Compress-Archive -Path (Join-Path $_.FullName "*") -DestinationPath $zip -Force
             Split-LargeFile -Path $zip
           }
+          if ($script:SplitArtifactsCreated) {
           @"
           Large archives are split at 1900MB to stay below GitHub's per-asset limit.
           To reconstruct on Windows:
             copy /b bundle.zip.001+bundle.zip.002+bundle.zip.003 bundle.zip
           Use all parts for the same bundle name, in numeric order.
           "@ | Set-Content -Encoding UTF8 -Path artifacts/README-recombine.txt
+          }
 
       - name: Publish GitHub release
         if: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '') }}
