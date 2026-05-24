@@ -38,7 +38,7 @@ ADDONS = {
         "artifact": "gpu-addon-intel-openvino-win64",
         "label": "Intel OpenVINO",
         "provider": "OpenVINOExecutionProvider",
-        "packages": ["onnxruntime-openvino"],
+        "packages": ["onnxruntime-openvino==1.24.1", "openvino==2025.4.1"],
     },
 }
 

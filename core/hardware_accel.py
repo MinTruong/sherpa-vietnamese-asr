@@ -103,6 +103,34 @@ def gpu_addon_install_hint(addon_id: str) -> Dict[str, Any]:
     }
 
 
+def _gpu_addon_dll_dirs(site_dir: Path) -> List[Path]:
+    dirs = [
+        site_dir,
+        site_dir / "onnxruntime" / "capi",
+        site_dir / "openvino" / "libs",
+        site_dir / "openvino" / "runtime" / "bin" / "intel64" / "Release",
+    ]
+    for dll_name in (
+        "openvino.dll",
+        "openvino_intel_cpu_plugin.dll",
+        "openvino_intel_gpu_plugin.dll",
+        "intel_gpu_plugin.dll",
+    ):
+        try:
+            dirs.extend(path.parent for path in site_dir.rglob(dll_name))
+        except OSError:
+            pass
+
+    unique: List[Path] = []
+    seen = set()
+    for path in dirs:
+        text = str(path)
+        if text not in seen:
+            unique.append(path)
+            seen.add(text)
+    return unique
+
+
 def recommended_gpu_addon() -> Optional[Dict[str, Any]]:
     nvidia = detect_nvidia_gpus()
     controllers = detect_windows_video_controllers()
@@ -149,8 +177,7 @@ def configure_gpu_addon_paths() -> List[str]:
         if text not in sys.path:
             sys.path.insert(0, text)
         if platform.system().lower() == "windows":
-            dll_dirs = [site_dir, site_dir / "onnxruntime" / "capi"]
-            for dll_dir in dll_dirs:
+            for dll_dir in _gpu_addon_dll_dirs(site_dir):
                 if not dll_dir.exists():
                     continue
                 dll_text = str(dll_dir)
