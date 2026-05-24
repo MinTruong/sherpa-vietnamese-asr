@@ -1,6 +1,12 @@
 # core/ - Thư viện dùng chung giữa desktop app và web service
 # KHÔNG import PyQt6 - pure Python
 
+try:
+    from core.hardware_accel import configure_gpu_addon_paths
+    configure_gpu_addon_paths()
+except Exception:
+    pass
+
 from core.config import (
     DEBUG_LOGGING,
     BASE_DIR,

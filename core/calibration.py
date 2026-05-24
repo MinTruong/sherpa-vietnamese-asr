@@ -104,6 +104,8 @@ def _model_specs() -> List[Dict[str, Any]]:
 def run_provider_probe(policy: str = "auto", light: bool = False) -> List[Dict[str, Any]]:
     """Create ONNX sessions and record the actual provider ORT selected."""
     try:
+        from core.hardware_accel import configure_gpu_addon_paths
+        configure_gpu_addon_paths()
         import onnxruntime as ort  # type: ignore
     except Exception as exc:
         return [{"stage": "onnxruntime", "error": f"{type(exc).__name__}: {exc}"}]
@@ -166,6 +168,12 @@ def detect_calibration_status() -> Dict[str, Any]:
     elif not provider_ready:
         reason = "provider_probe_failed"
 
+    addon = recommended_gpu_addon()
+    if addon and gpus and not provider and not addon.get("installed"):
+        reason = "gpu_addon_missing"
+    elif addon and gpus and addon.get("installed") and not provider_ready:
+        reason = "gpu_addon_provider_not_loaded"
+
     return {
         "hardware": hw,
         "ram": _safe_ram_info(),
@@ -175,7 +183,7 @@ def detect_calibration_status() -> Dict[str, Any]:
         "provider_ready": provider_ready,
         "can_optimize": bool(gpus and provider and provider_ready),
         "reason": reason,
-        "recommended_addon": recommended_gpu_addon(),
+        "recommended_addon": addon,
         "installed_addons": installed_gpu_addons(),
         "light_probe": light_probe,
         "sample_file": str(CALIBRATION_SAMPLE_MP3),

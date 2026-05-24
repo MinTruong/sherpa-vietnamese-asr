@@ -1584,11 +1584,27 @@ class FileProcessingTab(QWidget):
         if addon and not addon.get("installed") and not status.get("provider_ready"):
             self._set_execution_provider("cpu")
             self.btn_device_calibration.setEnabled(True)
+            expected = addon.get("expected_display_path") or f"/gpu_addons/{addon.get('id', '<id>')}/Lib/site-packages/onnxruntime/"
             self._calibration_info(
                 "Phát hiện GPU nhưng chưa có gói tăng tốc phù hợp.\n\n"
                 + self._hardware_message(status)
                 + f"\n\nHãy tải: {addon.get('zip_name') or addon.get('artifact') + '-<version>.zip'}"
-                + "\nGiải nén gói này vào thư mục portable, rồi mở lại ứng dụng và bấm Tối ưu thiết bị.",
+                + "\nGiải nén vào thư mục gốc của ứng dụng."
+                + f"\nSau khi giải nén phải có đường dẫn: {expected}"
+                + "\nSau đó mở lại ứng dụng và bấm Tối ưu thiết bị.",
+            )
+            return
+
+        if addon and addon.get("installed") and not status.get("provider_ready"):
+            self._set_execution_provider("cpu")
+            self.btn_device_calibration.setEnabled(True)
+            expected = addon.get("expected_display_path") or f"/gpu_addons/{addon.get('id', '<id>')}/Lib/site-packages/onnxruntime/"
+            self._calibration_warning(
+                "Đã thấy gói tăng tốc nhưng ONNX Runtime chưa nạp được provider GPU.\n\n"
+                + self._hardware_message(status)
+                + f"\n\nĐường dẫn cần có trong thư mục gốc của ứng dụng: {expected}"
+                + "\nHãy đóng hẳn ứng dụng, mở lại rồi bấm Tối ưu thiết bị."
+                + "\nNếu vẫn lỗi, hãy xóa thư mục /gpu_addons/ rồi giải nén lại gói phù hợp vào đúng thư mục gốc của ứng dụng.",
             )
             return
 

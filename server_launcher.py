@@ -116,6 +116,13 @@ def setup_paths():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     if base_dir not in sys.path:
         sys.path.insert(0, base_dir)
+    try:
+        from core.hardware_accel import configure_gpu_addon_paths
+        added = configure_gpu_addon_paths()
+        if added:
+            logging.getLogger("asr.launcher").info(f"GPU add-on paths: {added}")
+    except Exception as exc:
+        logging.getLogger("asr.launcher").warning(f"GPU add-on path setup failed: {exc}")
 
 
 def _start_offline_pwa_server(host, main_port, use_http, cert_file, key_file, logger):

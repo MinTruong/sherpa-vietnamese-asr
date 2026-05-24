@@ -122,12 +122,13 @@ Version: {VERSION}
 Provider: {meta['provider']}
 
 Install:
-1. Download the matching CPU portable app for the same version.
-2. Extract this zip directly into the portable app root folder.
-3. The folder gpu_addons\\{addon_id}\\Lib\\site-packages must exist next to app.py/server_launcher.py.
-4. Restart the app and click "Tối ưu thiết bị".
+1. Download the matching Sherpa Vietnamese ASR app for the same version.
+2. Extract this zip into the app root folder, the folder that contains app.py or server_launcher.py.
+3. After extraction, this path must exist in the app root folder:
+   gpu_addons\\{addon_id}\\Lib\\site-packages\\onnxruntime\\
+4. Close the app completely, open it again, then click "Tối ưu thiết bị".
 
-Do not install this package globally. It is only a portable runtime add-on.
+Do not install this package globally. It is only an app-local runtime add-on.
 """
     (out_dir / "README-GPU-ADDON.txt").write_text(readme, encoding="utf-8")
 

@@ -480,11 +480,27 @@ async function runServerCalibration() {
         if (addon && !addon.installed && !status.provider_ready) {
             window.appConfig.execution_provider = 'cpu';
             updateCalibrationStatus('cpu');
+            const expected = addon.expected_display_path || `/gpu_addons/${addon.id || '<id>'}/Lib/site-packages/onnxruntime/`;
             alert(
                 'Phát hiện GPU nhưng chưa có gói tăng tốc phù hợp.\n\n' +
                 calibrationHardwareText(status) +
                 `\n\nHãy tải: ${addon.zip_name || (addon.artifact + '-<version>.zip')}` +
-                '\nGiải nén gói này vào thư mục portable, rồi mở lại ứng dụng và bấm Tối ưu thiết bị.'
+                '\nGiải nén vào thư mục gốc của ứng dụng.' +
+                `\nSau khi giải nén phải có đường dẫn: ${expected}` +
+                '\nSau đó mở lại ứng dụng và bấm Tối ưu thiết bị.'
+            );
+            return;
+        }
+        if (addon && addon.installed && !status.provider_ready) {
+            window.appConfig.execution_provider = 'cpu';
+            updateCalibrationStatus('cpu');
+            const expected = addon.expected_display_path || `/gpu_addons/${addon.id || '<id>'}/Lib/site-packages/onnxruntime/`;
+            alert(
+                'Đã thấy gói tăng tốc nhưng ONNX Runtime chưa nạp được provider GPU.\n\n' +
+                calibrationHardwareText(status) +
+                `\n\nĐường dẫn cần có trong thư mục gốc của ứng dụng: ${expected}` +
+                '\nHãy đóng hẳn server/app, mở lại rồi bấm Tối ưu thiết bị.' +
+                '\nNếu vẫn lỗi, hãy xóa thư mục /gpu_addons/ rồi giải nén lại gói phù hợp vào đúng thư mục gốc của ứng dụng.'
             );
             return;
         }

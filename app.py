@@ -27,8 +27,17 @@ setup_logging("desktop")
 import numpy
 
 try:
+    from core.hardware_accel import configure_gpu_addon_paths
+    _gpu_addon_paths = configure_gpu_addon_paths()
+    if _gpu_addon_paths:
+        print(f"[Init] GPU add-on paths: {_gpu_addon_paths}")
+except Exception as e:
+    print(f"[Init] GPU add-on path setup failed: {e}")
+
+try:
     import onnxruntime as _ort
     print(f"[Init] onnxruntime {_ort.__version__}")
+    print(f"[Init] ORT providers: {_ort.get_available_providers()}")
 except ImportError as e:
     print(f"[Init] onnxruntime not available: {e}")
 

@@ -47,25 +47,60 @@ def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def gpu_addon_site_package_candidates(addon_id: str) -> List[Path]:
+    root = project_root()
+    meta = GPU_ADDON_DEFS[addon_id]
+    candidates = [root / "gpu_addons" / addon_id / "Lib" / "site-packages"]
+    for folder in sorted(root.glob(f"{meta['artifact']}-*")):
+        candidates.append(folder / "gpu_addons" / addon_id / "Lib" / "site-packages")
+    return candidates
+
+
 def gpu_addon_site_packages(addon_id: str) -> Path:
-    return project_root() / "gpu_addons" / addon_id / "Lib" / "site-packages"
+    for candidate in gpu_addon_site_package_candidates(addon_id):
+        if (candidate / "onnxruntime").is_dir():
+            return candidate
+    return gpu_addon_site_package_candidates(addon_id)[0]
+
+
+def gpu_addon_expected_onnxruntime_path(addon_id: str) -> Path:
+    return gpu_addon_site_packages(addon_id) / "onnxruntime"
 
 
 def installed_gpu_addons() -> List[Dict[str, Any]]:
     addons: List[Dict[str, Any]] = []
     for addon_id, meta in GPU_ADDON_DEFS.items():
         site_dir = gpu_addon_site_packages(addon_id)
+        expected_onnxruntime = site_dir / "onnxruntime"
         addons.append(
             {
                 "id": addon_id,
                 "label": meta["label"],
                 "artifact": meta["artifact"],
                 "provider": meta["provider"],
-                "installed": (site_dir / "onnxruntime").is_dir(),
+                "installed": expected_onnxruntime.is_dir(),
                 "site_packages": str(site_dir),
+                "expected_path": str(expected_onnxruntime),
+                "expected_display_path": f"/gpu_addons/{addon_id}/Lib/site-packages/onnxruntime/",
             }
         )
     return addons
+
+
+def gpu_addon_install_hint(addon_id: str) -> Dict[str, Any]:
+    expected = gpu_addon_expected_onnxruntime_path(addon_id)
+    root = project_root()
+    candidates = [
+        str(candidate / "onnxruntime")
+        for candidate in gpu_addon_site_package_candidates(addon_id)
+        if (candidate / "onnxruntime").is_dir()
+    ][:5]
+    return {
+        "expected_path": str(expected),
+        "expected_display_path": f"/gpu_addons/{addon_id}/Lib/site-packages/onnxruntime/",
+        "found_candidates": candidates,
+        "zip_at_root": str(root / f"{GPU_ADDON_DEFS[addon_id]['artifact']}.zip"),
+    }
 
 
 def recommended_gpu_addon() -> Optional[Dict[str, Any]]:
@@ -91,7 +126,8 @@ def recommended_gpu_addon() -> Optional[Dict[str, Any]]:
     except Exception:
         version = "<version>"
     meta["zip_name"] = f"{meta['artifact']}-{version}.zip"
-    meta["installed"] = (gpu_addon_site_packages(addon_id) / "onnxruntime").is_dir()
+    meta["installed"] = gpu_addon_expected_onnxruntime_path(addon_id).is_dir()
+    meta.update(gpu_addon_install_hint(addon_id))
     return meta
 
 
