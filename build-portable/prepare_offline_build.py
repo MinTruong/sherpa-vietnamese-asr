@@ -125,7 +125,6 @@ MODELS_CONFIG = {
         "revision": "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee",
         "integrity_files": {
             "config.yaml": "5ce2bfa9a938dc132cec1172592d65173cbb8f444ea1e4133f10f9391de155be",
-            "README.md": "61c2f4bc2cc2bd6c33cf93f6b94a35a8819ba9a9a1dd081bec4815225a0d9739",
             "embedding/pytorch_model.bin": "6f10ff60898a1d185fa22e1d11e0bfa8a92efec811f11bca48cb8cafebefd929",
             "plda/plda.npz": "9b77bcd840692710dd3496f62ecfeed8d8e5f002fd991b785079b244eab7d255",
             "plda/xvec_transform.npz": "325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f",
