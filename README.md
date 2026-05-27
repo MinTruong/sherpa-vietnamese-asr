@@ -109,6 +109,25 @@ Số tốc độ trong hộp thoại **Tối ưu thiết bị** là thời gian 
 - Desktop có thu âm trực tiếp, chỉnh tên/gộp/tách người nói, tua theo câu, theme sáng/tối.
 - Web Service có Web UI, queue, tài khoản, admin GUI, Windows Service và PWA offline.
 
+## Công nghệ
+
+| Thành phần | Công nghệ |
+|---|---|
+| ASR | Sherpa-ONNX, Zipformer RNN-T 30M + 68M |
+| Diarization | Pyannote Community-1 + Senko CAM++ bằng Pure ONNX Runtime |
+| Speaker embedding | CAM++ 192-dim, Pyannote/WeSpeaker ResNet34-LM |
+| Overlap separation | Conv-TasNet 16k Libri2Mix ONNX |
+| NaturalTurn | Backchannel detection theo Cychosz et al. 2025 |
+| Dấu câu | ViBERT-capu ONNX FP32 / INT8 |
+| VAD | Silero VAD + Pyannote Segmentation ONNX |
+| Audio quality | Microsoft DNSMOS ONNX |
+| Resampling | SoXR HQ/VHQ |
+| GPU acceleration | ONNX Runtime DirectML, OpenVINO; CUDA không publish mặc định từ 2.6.1 |
+| Desktop GUI | PyQt6 |
+| Web backend | FastAPI, WebSocket, SQLite |
+| PWA offline | ONNX Runtime Web, WASM/WebGPU |
+| Summarizer | Gemma 4 E2B GGUF qua llama-cpp-python |
+
 ## PWA offline
 
 PWA offline chạy trong trình duyệt bằng WASM/WebGPU. PWA không dùng GPU add-on của desktop/server, không cần DirectML hoặc OpenVINO. Khi trình duyệt hỗ trợ WebGPU, PWA tự dùng WebGPU cho những phần đã được frontend hỗ trợ; nếu không, PWA tự fallback về WASM/CPU.
@@ -184,6 +203,33 @@ gpu-models-win64-<version>.zip
 | [welcomyou/convtasnet-libri2mix-16k-onnx](https://huggingface.co/welcomyou/convtasnet-libri2mix-16k-onnx) | CC-BY-SA-4.0 | JorisCos Conv-TasNet |
 
 Script tải model có pin SHA256 trong `build-portable/prepare_offline_build.py`.
+
+## Ghi nhận
+
+### Thư viện & Models
+
+- [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) — ASR engine.
+- [hynt/Zipformer-30M-RNNT-6000h](https://huggingface.co/hynt/Zipformer-30M-RNNT-6000h) — Vietnamese ASR model 30M.
+- [csukuangfj/sherpa-onnx-zipformer-vi-2025-04-20](https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-vi-2025-04-20) — Vietnamese ASR model 68M.
+- [ViBERT-capu](https://huggingface.co/dragonSwing/vibert-capu) — punctuation restoration; bản ONNX convert publish tại [welcomyou/vibert-capu-onnx](https://huggingface.co/welcomyou/vibert-capu-onnx).
+- [Senko](https://github.com/narcotic-sh/senko) — speaker diarization pipeline với CAM++ và clustering.
+- [Pyannote](https://github.com/pyannote/pyannote-audio) — speaker diarization pipeline Community-1.
+- [altunenes/speaker-diarization-community-1-onnx](https://huggingface.co/altunenes/speaker-diarization-community-1-onnx) — ONNX models cho Pyannote Community-1.
+- [3D-Speaker](https://github.com/modelscope/3D-Speaker) — CAM++ 192-dim speaker embedding; bản ONNX convert publish tại [welcomyou/campplus-3dspeaker-200k-onnx](https://huggingface.co/welcomyou/campplus-3dspeaker-200k-onnx).
+- [WeSpeaker](https://github.com/wenet-e2e/wespeaker) — ResNet34-LM speaker embedding.
+- [Asteroid](https://github.com/asteroid-team/asteroid) và [JorisCos/ConvTasNet_Libri2Mix_sepclean_16k](https://huggingface.co/JorisCos/ConvTasNet_Libri2Mix_sepclean_16k) — overlap separation; bản ONNX convert publish tại [welcomyou/convtasnet-libri2mix-16k-onnx](https://huggingface.co/welcomyou/convtasnet-libri2mix-16k-onnx).
+- [Microsoft DNSMOS](https://github.com/microsoft/DNS-Challenge) — audio quality assessment.
+- [ONNX Runtime](https://onnxruntime.ai/) — CPU, DirectML, OpenVINO và Web inference runtime.
+- [FFmpeg](https://ffmpeg.org/) — decode, probe và chuyển đổi audio/video.
+- [SoX Resampler Library](https://sourceforge.net/projects/soxr/) — resampling chất lượng cao.
+- [FastAPI](https://fastapi.tiangolo.com/), [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) và [llama.cpp](https://github.com/ggml-org/llama.cpp) — web service, desktop GUI và local summarizer.
+
+### Papers
+
+- Cychosz et al., "Natural conversational turn-taking" — *Scientific Reports* 2025 ([doi](https://www.nature.com/articles/s41598-025-24381-1)) — NaturalTurn backchannel detection.
+- Bredin et al., "Pyannote.audio 2.1" — *arXiv* 2023 ([2310.00032](https://arxiv.org/abs/2310.00032)) — speaker diarization pipeline.
+- Chen et al., "3D-Speaker" — *arXiv* 2024 ([2403.19971](https://arxiv.org/abs/2403.19971)) — CAM++ speaker embedding và clustering.
+- Prabhavalkar et al., "Automatic gain control and multi-style training for robust ASR" — *ICASSP* 2015 ([pdf](https://research.google.com/pubs/archive/43289.pdf)) — per-segment RMS normalization.
 
 ## License
 
