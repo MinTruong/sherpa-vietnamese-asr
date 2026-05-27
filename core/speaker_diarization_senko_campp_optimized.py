@@ -388,17 +388,12 @@ class SenkoCamppDiarizerOptimized:
         seg_opts.log_severity_level = 3
         seg_opts.enable_cpu_mem_arena = False
         seg_opts.optimized_model_filepath = self.seg_path + ".opt"
-        if str(self.execution_provider).lower() not in ("cpu", "none", "off"):
-            from core.hardware_accel import create_ort_session
-            self.seg_sess, seg_provider = create_ort_session(
-                ort, self.seg_path, seg_opts,
-                policy=self.execution_provider,
-                stage="CAM++ speech regions (pyannote segmentation)",
-            )
-            logger.info(f"[Senko-CAM++] segmentation provider={seg_provider}")
-        else:
-            self.seg_sess = ort.InferenceSession(
-                self.seg_path, seg_opts, providers=['CPUExecutionProvider'])
+        # Keep segmentation on CPU. Calibration/PWA only GPU-accelerate the
+        # embedding stage; segmentation is recurrent/small-batch and GPU setup
+        # usually does not improve full pipeline latency.
+        self.seg_sess = ort.InferenceSession(
+            self.seg_path, seg_opts, providers=['CPUExecutionProvider'])
+        logger.info("[Senko-CAM++] segmentation provider={'actual_provider': 'CPUExecutionProvider'}")
 
         print(f"[Senko-CAM++] Loaded CAM++ 192-dim + pyannote segmentation"
               f" | window={self.window}s, step={self.step}s, mer_cos={self.mer_cos}"

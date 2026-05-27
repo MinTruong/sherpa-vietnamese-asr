@@ -29,13 +29,11 @@ MODELS_CONFIG = {
         "revision": "24ed30248e1c96bb690c81c24ab4e056f8cd9fce",
         "integrity_files": {
             "bpe.model": "002894e7a82d80ffa5e25008ec8c5496159db804005e2103de96b01b4c13d445",
-            "bpe.vocab": "051d8a064d634903b9861cc1cff8465de3f9ad25a6658809c773829df5013383",
             "decoder-epoch-20-avg-10.onnx": "cf2aa385b82c9d5d40cd29c3188af52d0249b3b78f0d4b7eb84ad502d50c7e7f",
             "encoder-epoch-20-avg-10.onnx": "b0daa9842a1f39d146e57d6e951edc8910ddd234cbb00e9b5015a5280a5ba221",
             "joiner-epoch-20-avg-10.onnx": "d861afe55f7ff43c90069cad0a5d07261a408be5c7fd2aac8c84b1f3225da021",
             "tokens.txt": "130879ce6a5814acd33eb06afb4add7551a1e695ad56a81751770dd9ed3b0ac9",
         },
-        "generated_sentencepiece_files": ["bpe.vocab", "tokens.txt"],
     },
     "zipformer-30m-rnnt-streaming-6000h": {
         "type": "huggingface",
@@ -46,13 +44,11 @@ MODELS_CONFIG = {
         "revision": "c122fdc21cea4894fd775e9d3fe66ebbc787e26b",
         "integrity_files": {
             "bpe.model": "002894e7a82d80ffa5e25008ec8c5496159db804005e2103de96b01b4c13d445",
-            "bpe.vocab": "051d8a064d634903b9861cc1cff8465de3f9ad25a6658809c773829df5013383",
             "decoder-epoch-31-avg-11-chunk-64-left-128.fp16.onnx": "12274189a3ef638905e0d966a4f1ab090c96447f165190c4aa6b8053ac49b014",
             "encoder-epoch-31-avg-11-chunk-64-left-128.fp16.onnx": "6674187064a527bb9447e05a46c99bcc1cd60fa9ed07f477209b332bd8e64568",
             "joiner-epoch-31-avg-11-chunk-64-left-128.fp16.onnx": "54f469ec6841deca336e33808514640be9bc1cb222dedfda312cdb2155ae37df",
             "tokens.txt": "130879ce6a5814acd33eb06afb4add7551a1e695ad56a81751770dd9ed3b0ac9",
         },
-        "generated_sentencepiece_files": ["bpe.vocab", "tokens.txt"],
     },
     "sherpa-onnx-zipformer-vi-2025-04-20": {
         "type": "huggingface",
@@ -63,13 +59,11 @@ MODELS_CONFIG = {
         "revision": "0fc3fea3ccd9c50b439755fa8a6aba546cb3a7d4",
         "integrity_files": {
             "bpe.model": "289dbb44527c13c419ae3a4d8ce6a349f01a97f8777e69934a77e3692d2f10db",
-            "bpe.vocab": "897e0c58b262e59ad0b4ad6aedf50d6c309b2724b7db32a1f72ee978cec5b794",
             "decoder-epoch-12-avg-8.onnx": "d1d27cca84c824a8acf5ce6edf0f2c0880cfe295d2e69b95134de1707e1d9998",
             "encoder-epoch-12-avg-8.onnx": "d56645616305ceee63a1fa63a4da32e688130e937e67b11f69adf79712377717",
             "joiner-epoch-12-avg-8.onnx": "a186d4ddf04cac3ddfb095dc6e7f705dcd08bd79d4c67334f43c3a7337bf8d9a",
             "tokens.txt": "f536d03c2e95ebd2930cf0abec88e823bd17d3c1933da7ae6a82db3b80605e15",
         },
-        "generated_sentencepiece_files": ["bpe.vocab"],
     },
     
     # NLP Models
@@ -131,12 +125,12 @@ MODELS_CONFIG = {
         "revision": "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee",
         "integrity_files": {
             "config.yaml": "5ce2bfa9a938dc132cec1172592d65173cbb8f444ea1e4133f10f9391de155be",
+            "README.md": "61c2f4bc2cc2bd6c33cf93f6b94a35a8819ba9a9a1dd081bec4815225a0d9739",
             "embedding/pytorch_model.bin": "6f10ff60898a1d185fa22e1d11e0bfa8a92efec811f11bca48cb8cafebefd929",
             "plda/plda.npz": "9b77bcd840692710dd3496f62ecfeed8d8e5f002fd991b785079b244eab7d255",
             "plda/xvec_transform.npz": "325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f",
             "segmentation/pytorch_model.bin": "7ad24338d844fb95985486eb1a464e32d229f6d7a03c9abe60f978bacf3f816e",
         },
-        "generated_plda_prepared": "plda/plda_prepared.npz",
     },
     "pyannote_segmentation_3.0": {
         "type": "huggingface",
@@ -294,98 +288,12 @@ def _verify_integrity_files(model_id: str, base_dir: Path, integrity_files: dict
         _verify_sha256(file_path, expected_sha256, f"{model_id}:{relative_path}")
 
 
-def _generate_sentencepiece_artifacts(model_id: str, base_dir: Path, config: dict) -> None:
-    generated_files = config.get("generated_sentencepiece_files") or []
-    if not generated_files:
-        return
-
-    bpe_model_path = _resolve_under(base_dir, "bpe.model")
-    if not bpe_model_path.exists():
-        return
-
-    try:
-        import sentencepiece as spm
-    except ImportError as exc:
-        raise RuntimeError(
-            f"KhÃ´ng thá»ƒ sinh files SentencePiece cho {model_id}: chÆ°a cÃ i sentencepiece"
-        ) from exc
-
-    integrity_files = config.get("integrity_files", {})
-    processor = spm.SentencePieceProcessor(model_file=str(bpe_model_path))
-    pieces = [processor.IdToPiece(index) for index in range(processor.GetPieceSize())]
-    eol = "\r\n"
-
-    def write_if_needed(relative_path: str, content: str) -> None:
-        expected_sha256 = integrity_files.get(relative_path)
-        target_path = _resolve_under(base_dir, relative_path)
-        if expected_sha256 and target_path.exists() and _sha256_file(target_path) == expected_sha256:
-            return
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_bytes(content.encode("utf-8"))
-
-    if "tokens.txt" in generated_files:
-        token_lines = [f"{piece} {index}" for index, piece in enumerate(pieces)]
-        write_if_needed("tokens.txt", eol.join(token_lines) + eol)
-
-    if "bpe.vocab" in generated_files:
-        vocab_lines = [
-            f"{piece}\t{processor.GetScore(index)}"
-            for index, piece in enumerate(pieces)
-        ]
-        write_if_needed("bpe.vocab", eol.join(vocab_lines) + eol)
-
-
-def _generate_plda_prepared(model_id: str, base_dir: Path, config: dict) -> None:
-    relative_path = config.get("generated_plda_prepared")
-    if not relative_path:
-        return
-
-    target_path = _resolve_under(base_dir, relative_path)
-    if target_path.exists():
-        return
-
-    try:
-        import numpy as np
-        from scipy.linalg import eigh
-    except ImportError as exc:
-        raise RuntimeError(
-            f"KhÃ´ng thá»ƒ sinh PLDA prepared cho {model_id}: chÆ°a cÃ i numpy/scipy"
-        ) from exc
-
-    plda_dir = target_path.parent
-    xvec_path = plda_dir / "xvec_transform.npz"
-    plda_path = plda_dir / "plda.npz"
-    if not xvec_path.exists() or not plda_path.exists():
-        return
-
-    xvec = np.load(xvec_path)
-    plda = np.load(plda_path)
-    mean1, mean2, lda = xvec["mean1"], xvec["mean2"], xvec["lda"]
-    mu, tr, psi = plda["mu"], plda["tr"], plda["psi"]
-    w_matrix = np.linalg.inv(tr.T @ tr)
-    b_matrix = np.linalg.inv((tr.T / psi) @ tr)
-    acvar, wccn = eigh(b_matrix, w_matrix)
-
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        target_path,
-        mean1=mean1,
-        mean2=mean2,
-        lda=lda,
-        mu=mu,
-        plda_tr=wccn.T[::-1],
-        plda_psi=acvar[::-1],
-    )
-
-
 def _verify_existing_model(model_id: str, config: dict, models_dir: Path) -> None:
     base_dir = models_dir / config["local_dir"]
     check_path = _resolve_under(base_dir, config["check_file"])
 
     if config["type"] == "huggingface":
         _require_security_keys(model_id, config, "integrity_files")
-        _generate_sentencepiece_artifacts(model_id, base_dir, config)
-        _generate_plda_prepared(model_id, base_dir, config)
         _verify_integrity_files(model_id, base_dir, config["integrity_files"])
     elif config["type"] in {"huggingface_file", "direct_download", "manual_local"}:
         _require_security_keys(model_id, config, "sha256")
@@ -433,8 +341,6 @@ def download_huggingface_model(model_id: str) -> bool:
             revision=config['revision'],
             allow_patterns=sorted(config["integrity_files"].keys()),
         )
-        _generate_sentencepiece_artifacts(model_id, local_path, config)
-        _generate_plda_prepared(model_id, local_path, config)
         _verify_integrity_files(model_id, local_path, config["integrity_files"])
         print(f"✅ Đã tải xong {model_id}")
         return True

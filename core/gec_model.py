@@ -121,10 +121,18 @@ class GecBERTModel:
         for model_path in model_paths:
             logger.info(f"[GecBERT] Loading ONNX model from: {model_path}")
 
-            # Tìm file ONNX — ưu tiên int8 nếu prefer_int8=True (desktop)
+            provider_is_gpu = (
+                self.execution_provider
+                and self.execution_provider.lower() not in ("cpu", "none", "off")
+            )
+            use_int8 = bool(self.prefer_int8) and not provider_is_gpu
+
+            # Tìm file ONNX — ưu tiên int8 chỉ khi chạy CPU/save RAM.
+            # GPU providers use fp32 because calibration is measured on fp32
+            # and quantized ViBERT adds many CPU<->GPU copies on DirectML/CUDA.
             onnx_fp32 = os.path.join(model_path, "vibert-capu.onnx")
             onnx_int8 = os.path.join(model_path, "vibert-capu.int8.onnx")
-            if self.prefer_int8 and os.path.exists(onnx_int8):
+            if use_int8 and os.path.exists(onnx_int8):
                 onnx_path = onnx_int8
             elif os.path.exists(onnx_fp32):
                 onnx_path = onnx_fp32
@@ -135,26 +143,50 @@ class GecBERTModel:
                     f"ONNX model not found in {model_path}. "
                     f"Run temp/export_vibert_onnx.py to export first."
                 )
+            logger.info(
+                f"[GecBERT] selected ONNX={os.path.basename(onnx_path)} "
+                f"provider_policy={self.execution_provider} prefer_int8={self.prefer_int8}"
+            )
+
+            def _new_session_options(selected_onnx_path):
+                sess_options = ort.SessionOptions()
+                sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                sess_options.inter_op_num_threads = 1
+                from core.config import compute_ort_threads, PHYSICAL_CORES
+                sess_options.intra_op_num_threads = compute_ort_threads(PHYSICAL_CORES, full_ht=True)
+                sess_options.enable_cpu_mem_arena = False
+                sess_options.optimized_model_filepath = selected_onnx_path + ".opt"
+                return sess_options
 
             # Load ONNX session
-            sess_options = ort.SessionOptions()
-            sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            sess_options.inter_op_num_threads = 1
-            from core.config import compute_ort_threads, PHYSICAL_CORES
+            sess_options = _new_session_options(onnx_path)
             # BERT transformer song song tốt hơn ASR encoder — dùng full_ht=True
             # Benchmark: Z=9-10 tốt hơn Z=6 (~20% faster trên 6C/12T)
-            sess_options.intra_op_num_threads = compute_ort_threads(PHYSICAL_CORES, full_ht=True)
             sess_options.enable_cpu_mem_arena = False  # Tránh arena leak
             # Cache optimized graph: giảm disk I/O lần load sau
-            sess_options.optimized_model_filepath = onnx_path + ".opt"
-            if self.execution_provider and self.execution_provider.lower() not in ("cpu", "none", "off"):
-                from core.hardware_accel import create_ort_session, auto_batch_size
+            if provider_is_gpu:
+                from core.hardware_accel import create_ort_session, auto_batch_size, is_gpu_provider
                 session, provider_info = create_ort_session(
                     ort, onnx_path, sess_options,
                     policy=self.execution_provider,
                     stage="ViBERT punctuation",
                 )
-                if self.mini_batch_size is None:
+                if not is_gpu_provider(provider_info.get("actual_provider")):
+                    logger.warning(
+                        "[GecBERT] GPU provider fell back to CPU for ViBERT; "
+                        "using CPU INT8 when available. provider=%s",
+                        provider_info,
+                    )
+                    if os.path.exists(onnx_int8):
+                        onnx_path = onnx_int8
+                        sess_options = _new_session_options(onnx_path)
+                        session = ort.InferenceSession(
+                            onnx_path, sess_options,
+                            providers=["CPUExecutionProvider"]
+                        )
+                    if self.mini_batch_size is None:
+                        self.mini_batch_size = 32
+                elif self.mini_batch_size is None:
                     self.mini_batch_size = auto_batch_size(
                         "ViBERT punctuation", 32, provider_info.get("actual_provider")
                     )

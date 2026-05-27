@@ -2,6 +2,7 @@
 import sys
 import os
 import re
+import json
 import unicodedata
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
@@ -401,6 +402,36 @@ class FileProcessingTab(QWidget):
         form_config.setSpacing(2)
         form_config.setContentsMargins(8, 4, 8, 4)
 
+        self.btn_device_calibration = QPushButton("Tối ưu")
+        self.btn_device_calibration.setToolTip(
+            "Kiểm tra CPU/GPU và chạy file mẫu 10 phút để tối ưu thiết bị."
+        )
+        self.btn_device_calibration.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_input']};
+                color: {COLORS['text_primary']};
+                font-size: 11px;
+                padding: 4px 10px;
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['bg_card']};
+                border-color: {COLORS['accent']};
+            }}
+            QPushButton:disabled {{
+                color: {COLORS['text_secondary']};
+                border-color: {COLORS['border']};
+            }}
+        """)
+        self.btn_device_calibration.clicked.connect(self.start_device_calibration_detect)
+        self.label_device_accel = QLabel("CPU-only")
+        self.label_device_accel.setStyleSheet(f"color: {COLORS['text_secondary']}; padding-bottom: 4px;")
+        accel_layout = QHBoxLayout()
+        accel_layout.addWidget(self.label_device_accel, stretch=1)
+        accel_layout.addWidget(self.btn_device_calibration)
+        form_config.addRow("Tối ưu:", accel_layout)
+
         # Model Selection
         self.combo_model = QComboBox()
         self.combo_model.addItem("hynt/Zipformer-30M (nhanh)", "zipformer-30m-rnnt-6000h")
@@ -439,36 +470,6 @@ class FileProcessingTab(QWidget):
         threads_layout.addWidget(self.slider_threads)
         threads_layout.addWidget(self.label_threads)
         form_config.addRow("Số luồng CPU:", threads_layout)
-        
-        self.btn_device_calibration = QPushButton("Tối ưu thiết bị")
-        self.btn_device_calibration.setToolTip(
-            "Kiểm tra CPU/GPU và chạy file mẫu 10 phút để tối ưu tốc độ xử lý."
-        )
-        self.btn_device_calibration.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['bg_input']};
-                color: {COLORS['text_primary']};
-                font-size: 11px;
-                padding: 4px 10px;
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: {COLORS['bg_card']};
-                border-color: {COLORS['accent']};
-            }}
-            QPushButton:disabled {{
-                color: {COLORS['text_secondary']};
-                border-color: {COLORS['border']};
-            }}
-        """)
-        self.btn_device_calibration.clicked.connect(self.start_device_calibration_detect)
-        self.label_device_accel = QLabel("CPU-only")
-        self.label_device_accel.setStyleSheet(f"color: {COLORS['text_secondary']}; padding-bottom: 4px;")
-        accel_layout = QHBoxLayout()
-        accel_layout.addWidget(self.btn_device_calibration)
-        accel_layout.addWidget(self.label_device_accel, stretch=1)
-        form_config.addRow("Tăng tốc:", accel_layout)
 
         # Punctuation Confidence Slider
         self.slider_punct_conf = QSlider(Qt.Orientation.Horizontal)
@@ -671,6 +672,7 @@ class FileProcessingTab(QWidget):
         )
         self.check_save_ram.stateChanged.connect(self._on_save_ram_changed)
         form_config.addRow(self.check_save_ram)
+        self._refresh_save_ram_state()
 
 
         config_layout.addWidget(self.config_content)
@@ -1475,17 +1477,22 @@ class FileProcessingTab(QWidget):
         bypass_restorer = (slider_val == 1)
 
         execution_provider = os.environ.get("ASR_VN_ACCEL", "cpu")
+        stage_execution_providers = {}
         try:
             if self.main_window and hasattr(self.main_window, "config"):
                 execution_provider = self.main_window.config["FileSettings"].get(
                     "execution_provider", execution_provider
                 )
+                stage_text = self.main_window.config["FileSettings"].get(
+                    "stage_execution_providers", "{}"
+                )
+                stage_execution_providers = json.loads(stage_text) if stage_text else {}
         except Exception:
-            pass
-        
+            stage_execution_providers = {}
         return {
             "cpu_threads": self.slider_threads.value(),
             "execution_provider": execution_provider,
+            "stage_execution_providers": stage_execution_providers,
             "restore_punctuation": True,
             "bypass_restorer": bypass_restorer,
             "punctuation_confidence": confidence,
@@ -1494,27 +1501,146 @@ class FileProcessingTab(QWidget):
             "overlap_separation": self.check_overlap_separation.isChecked() and self.check_speaker_diarization.isChecked() and DIARIZATION_AVAILABLE,
             "num_speakers": -1 if self.spin_num_speakers.currentIndex() == 0 else int(self.spin_num_speakers.currentText()),
             "speaker_model": self.combo_speaker_model.currentData(),
-            "save_ram": self.check_save_ram.isChecked(),
+            "save_ram": self.check_save_ram.isChecked()
+            and str(execution_provider or "cpu").lower() in ("cpu", "none", "off"),
             "preprocess_rms_normalize": self.check_rms_normalize.isChecked(),
             "bypass_vad": self.check_bypass_vad.isChecked(),
             "resample_quality": "soxr_hq",
         }
 
-    def _set_execution_provider(self, value):
+    def _set_execution_provider(self, value, stage_execution_providers=None):
         value = value or "cpu"
         if self.main_window and hasattr(self.main_window, "config"):
             if "FileSettings" not in self.main_window.config:
                 self.main_window.config["FileSettings"] = {}
             self.main_window.config["FileSettings"]["execution_provider"] = value
+            if stage_execution_providers is not None:
+                self.main_window.config["FileSettings"]["stage_execution_providers"] = json.dumps(
+                    stage_execution_providers,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
             if hasattr(self.main_window, "save_config"):
                 self.main_window.save_config()
         if hasattr(self, "label_device_accel"):
             self.label_device_accel.setText("GPU auto" if value == "auto" else "CPU-only")
+        self._refresh_save_ram_state()
+
+    def _refresh_save_ram_state(self):
+        if not hasattr(self, "check_save_ram"):
+            return
+        is_gpu_auto = str(self._current_execution_provider() or "cpu").lower() == "auto"
+        self.check_save_ram.setEnabled(not is_gpu_auto)
+        if is_gpu_auto:
+            self.check_save_ram.setToolTip(
+                "Chỉ áp dụng khi chạy CPU-only.\n"
+                "Khi dùng GPU auto, ứng dụng giữ cấu hình GPU/FP32 để tránh chậm hơn."
+            )
+        else:
+            self.check_save_ram.setToolTip(
+                "Khi bật, các model sẽ được giải phóng khỏi bộ nhớ sau mỗi bước xử lý.\n"
+                "Chỉ áp dụng ở chế độ CPU-only.\n"
+                "- Bật: giảm RAM, nhưng chậm hơn khi xử lý file tiếp theo\n"
+                "- Tắt: giữ model trong RAM, xử lý file tiếp theo nhanh hơn"
+            )
+
+    def _current_execution_provider(self):
+        try:
+            if self.main_window and hasattr(self.main_window, "config"):
+                return self.main_window.config["FileSettings"].get("execution_provider", "cpu")
+        except Exception:
+            pass
+        return "cpu"
+
+    def _current_stage_execution_providers(self):
+        try:
+            if self.main_window and hasattr(self.main_window, "config"):
+                raw = self.main_window.config["FileSettings"].get("stage_execution_providers", "{}")
+                return json.loads(raw) if raw else {}
+        except Exception:
+            pass
+        return {}
+
+    def _has_gpu_auto_config(self):
+        if str(self._current_execution_provider() or "cpu").lower() == "auto":
+            return True
+        return any(str(v).lower() == "auto" for v in self._current_stage_execution_providers().values())
+
+    def _calibration_mode_choice(self):
+        is_gpu_auto = str(self._current_execution_provider() or "cpu").lower() == "auto"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Tối ưu thiết bị")
+        if is_gpu_auto:
+            box.setText(
+                "Thiết bị hiện đang dùng GPU Auto theo kết quả tối ưu đã lưu.\n\n"
+                "Bạn muốn làm gì?"
+            )
+        else:
+            box.setText(
+                "Thiết bị hiện đang dùng CPU-only, nhưng vẫn còn kết quả tối ưu GPU đã lưu.\n\n"
+                "Bạn muốn làm gì?"
+            )
+        rerun_btn = box.addButton("Tối ưu lại", QMessageBox.ButtonRole.AcceptRole)
+        mode_btn = box.addButton(
+            "Chuyển CPU-only" if is_gpu_auto else "Dùng GPU auto",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        cancel_btn = box.addButton("Hủy", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(rerun_btn)
+        box.setStyleSheet(f"""
+            QMessageBox {{
+                background-color: {COLORS['bg_card']};
+                color: {COLORS['text_primary']};
+            }}
+            QMessageBox QLabel {{
+                color: {COLORS['text_primary']};
+                background: transparent;
+            }}
+            QMessageBox QPushButton {{
+                background-color: {COLORS['bg_input']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+                padding: 6px 16px;
+                min-width: 88px;
+            }}
+            QMessageBox QPushButton:hover {{
+                background-color: {COLORS['accent']};
+                color: white;
+                border-color: {COLORS['accent']};
+            }}
+        """)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == mode_btn:
+            return "cpu" if is_gpu_auto else "gpu"
+        if clicked == rerun_btn:
+            return "rerun"
+        if clicked == cancel_btn:
+            return "cancel"
+        return "cancel"
 
     def start_device_calibration_detect(self):
         if self.transcriber and self.transcriber.isRunning():
             self._calibration_info("Đang xử lý file. Vui lòng đợi xong rồi chạy tối ưu thiết bị.")
             return
+        if self._has_gpu_auto_config():
+            choice = self._calibration_mode_choice()
+            if choice == "cpu":
+                self._set_execution_provider("cpu")
+                self.label_device_accel.setText("CPU-only")
+                self._calibration_info(
+                    "Đã chuyển sang CPU-only. Kết quả tối ưu GPU vẫn được giữ lại để bật lại khi cần."
+                )
+                return
+            if choice == "gpu":
+                self._set_execution_provider("auto")
+                self.label_device_accel.setText("GPU auto")
+                self._calibration_info("Đã chuyển sang GPU auto theo kết quả tối ưu đã lưu.")
+                return
+            if choice != "rerun":
+                return
         self.btn_device_calibration.setEnabled(False)
         self.label_device_accel.setText("Đang kiểm tra phần cứng...")
         self._device_calibration_thread = DeviceCalibrationThread(
@@ -1534,6 +1660,24 @@ class FileProcessingTab(QWidget):
         if ram.get("total_mb"):
             ram_text = f"\nRAM: {ram.get('available_mb', '?')} / {ram.get('total_mb')} MB khả dụng/tổng"
         return f"{status.get('hardware_summary', 'Không đọc được thông tin phần cứng')}{ram_text}"
+
+    def _gpu_models_download_hint(self, gpu_models):
+        if not gpu_models or gpu_models.get("installed"):
+            return ""
+        missing = gpu_models.get("missing_paths") or gpu_models.get("expected_paths") or []
+        expected = []
+        for item in missing:
+            path = item.get("display_path") or item.get("relative_path") or ""
+            if path:
+                expected.append(path)
+        expected_text = "\n".join(f"- {path}" for path in expected)
+        if expected_text:
+            expected_text = "\nSau khi giải nén phải có:\n" + expected_text
+        return (
+            f"\n\nHãy tải thêm: {gpu_models.get('zip_name') or 'gpu-models-win64-<version>.zip'}"
+            "\nGiải nén vào thư mục gốc của ứng dụng."
+            + expected_text
+        )
 
     def _calibration_message_box(self, icon, title, text, buttons=None, default_button=None):
         box = QMessageBox(self)
@@ -1595,12 +1739,14 @@ class FileProcessingTab(QWidget):
 
     def _on_device_calibration_detected(self, status):
         addon = status.get("recommended_addon") or {}
+        gpu_models = status.get("recommended_gpu_models") or {}
         if addon and not addon.get("installed") and not status.get("provider_ready"):
             self._set_execution_provider("cpu")
             self.btn_device_calibration.setEnabled(True)
             expected = addon.get("expected_display_path") or f"/gpu_addons/{addon.get('id', '<id>')}/Lib/site-packages/onnxruntime/"
+            expected = expected + self._gpu_models_download_hint(gpu_models)
             self._calibration_info(
-                "Phát hiện GPU nhưng chưa có gói tăng tốc phù hợp.\n\n"
+                "Phát hiện GPU nhưng chưa có gói tối ưu GPU phù hợp.\n\n"
                 + self._hardware_message(status)
                 + f"\n\nHãy tải: {addon.get('zip_name') or addon.get('artifact') + '-<version>.zip'}"
                 + "\nGiải nén vào thư mục gốc của ứng dụng."
@@ -1614,11 +1760,22 @@ class FileProcessingTab(QWidget):
             self.btn_device_calibration.setEnabled(True)
             expected = addon.get("expected_display_path") or f"/gpu_addons/{addon.get('id', '<id>')}/Lib/site-packages/onnxruntime/"
             self._calibration_warning(
-                "Đã thấy gói tăng tốc nhưng ONNX Runtime chưa nạp được provider GPU.\n\n"
+                "Đã thấy gói tối ưu GPU nhưng ONNX Runtime chưa nạp được provider GPU.\n\n"
                 + self._hardware_message(status)
                 + f"\n\nĐường dẫn cần có trong thư mục gốc của ứng dụng: {expected}"
                 + "\nHãy đóng hẳn ứng dụng, mở lại rồi bấm Tối ưu thiết bị."
                 + "\nNếu vẫn lỗi, hãy xóa thư mục /gpu_addons/ rồi giải nén lại gói phù hợp vào đúng thư mục gốc của ứng dụng.",
+            )
+            return
+
+        if gpu_models and not gpu_models.get("installed"):
+            self._set_execution_provider("cpu")
+            self.btn_device_calibration.setEnabled(True)
+            self._calibration_info(
+                "Phát hiện GPU và gói tối ưu GPU đã sẵn sàng, nhưng còn thiếu model GPU cho ViBERT.\n\n"
+                + self._hardware_message(status)
+                + self._gpu_models_download_hint(gpu_models)
+                + "\nSau đó mở lại ứng dụng và bấm Tối ưu thiết bị.",
             )
             return
 
@@ -1633,7 +1790,7 @@ class FileProcessingTab(QWidget):
 
         provider = status.get("preferred_provider", "GPU")
         reply = self._calibration_question(
-            "Phát hiện GPU có thể tăng tốc.\n\n"
+            "Phát hiện GPU có thể tối ưu xử lý.\n\n"
             + self._hardware_message(status)
             + f"\nProvider đề xuất: {provider}\n\n"
             "Chạy tối ưu bằng file mẫu 10 phút? Quá trình này có thể mất vài phút.",
@@ -1662,9 +1819,182 @@ class FileProcessingTab(QWidget):
     def _on_device_calibration_progress(self, message, percent):
         self.label_device_accel.setText(f"{message} ({percent}%)")
 
+    def _format_calibration_number(self, value, suffix=""):
+        if value is None:
+            return "N/A"
+        try:
+            number = float(value)
+        except Exception:
+            return str(value)
+        if abs(number) < 0.001 and number != 0:
+            return f"{number:.2e}{suffix}"
+        return f"{number:.3f}{suffix}"
+
+    def _short_calibration_stage_label(self, item):
+        key = item.get("key") or ""
+        label = item.get("label") or key or "Stage"
+        labels = {
+            "speaker_campp_embedding": "CAM++ embedding",
+            "speaker_pyannote_embedding": "Pyannote embedding",
+            "dnsmos": "DNSMOS",
+            "punctuation": "Punctuation",
+        }
+        if key in labels:
+            return labels[key]
+        return (
+            label.replace("Speaker Diarization: ", "")
+            .replace("Pyannote embedding encoder", "Pyannote embedding")
+            .replace("Punctuation: ViBERT punctuation fp32", "Punctuation")
+            .replace("DNSMOS quality", "DNSMOS")
+        )
+
+    def _short_calibration_reason(self, item):
+        if item.get("missing"):
+            return "thiếu model"
+        reason = item.get("reason") or ""
+        reasons = {
+            "accepted": "đạt",
+            "diff_exceeds_tolerance": "diff vượt ngưỡng",
+            "gpu_not_faster_enough": "GPU chưa nhanh hơn 20%",
+            "gpu_batch_tune_failed": "batch tune lỗi",
+            "model_missing": "thiếu model",
+            "provider_unavailable": "provider GPU chưa sẵn sàng",
+            "gpu_provider_fell_back_to_cpu": "ORT fallback về CPU",
+            "provider_runtime_unsupported": "ORT/DirectML lỗi runtime",
+        }
+        if reason in reasons:
+            return reasons[reason]
+        if item.get("error"):
+            return "lỗi benchmark"
+        if item.get("skipped") or item.get("speedup") is None:
+            return reason or "không đo GPU"
+        return reason or "GPU không đạt ngưỡng"
+
+    def _short_calibration_error(self, item, max_len=220):
+        text = item.get("error") or item.get("error_detail") or ""
+        if not text:
+            retries = item.get("provider_retries") or []
+            if retries:
+                text = retries[-1].get("error") or ""
+        if not text:
+            return ""
+        text = " ".join(str(text).split())
+        replacements = {
+            "requested DmlExecutionProvider but ORT created CPUExecutionProvider": (
+                "ORT fallback: requested DmlExecutionProvider, actual CPUExecutionProvider"
+            ),
+            "requested CUDAExecutionProvider but ORT created CPUExecutionProvider": (
+                "ORT fallback: requested CUDAExecutionProvider, actual CPUExecutionProvider"
+            ),
+            "requested OpenVINOExecutionProvider but ORT created CPUExecutionProvider": (
+                "ORT fallback: requested OpenVINOExecutionProvider, actual CPUExecutionProvider"
+            ),
+        }
+        for needle, replacement in replacements.items():
+            if needle in text:
+                text = replacement if text == needle else text.replace(needle, replacement)
+                break
+        if len(text) > max_len:
+            return text[:max_len].rstrip() + "..."
+        return text
+
+    def _format_calibration_cpu_line(self, label, item, speedup_text=None):
+        parts = [self._short_calibration_reason(item)]
+        error = self._short_calibration_error(item)
+        if error:
+            parts.append(f"lỗi: {error}")
+        text = "; ".join(part for part in parts if part)
+        if speedup_text:
+            return f"- {label}: {speedup_text}, {text}"
+        return f"- {label}: {text}"
+
+    def _stage_is_active_for_current_profile(self, item, stage_profile):
+        pipeline_key = item.get("pipeline_key") or item.get("key") or ""
+        key = item.get("key") or ""
+        if key == "speaker_campp_embedding":
+            return stage_profile.get("diarization") == stage_profile.get("diarization_campp") == "auto"
+        if key == "speaker_pyannote_embedding":
+            return stage_profile.get("diarization") == stage_profile.get("diarization_pyannote") == "auto"
+        return stage_profile.get(pipeline_key) == "auto"
+
+    def _inactive_stage_note(self, item):
+        key = item.get("key") or ""
+        if key == "speaker_campp_embedding":
+            return "khi chọn CAM++"
+        if key == "speaker_pyannote_embedding":
+            return "khi chọn Pyannote"
+        return "khi bật stage này"
+
+    def _format_stage_calibration_lines(self, comparison, stage_profile=None):
+        lines = []
+        gpu_lines = []
+        inactive_gpu_lines = []
+        cpu_lines = []
+        stage_profile = stage_profile or {}
+        details = comparison.get("stage_details") or []
+        for item in details:
+            label = self._short_calibration_stage_label(item)
+            speedup = self._format_calibration_number(item.get("speedup"), "x")
+            sample_items = item.get("sample_items")
+            sample_total = item.get("sample_items_total")
+            sample_text = f", mẫu {sample_items}/{sample_total}" if sample_items and sample_total else ""
+
+            if item.get("missing") or item.get("error") or item.get("skipped") or item.get("speedup") is None:
+                cpu_lines.append(self._format_calibration_cpu_line(label, item))
+                continue
+
+            batch = item.get("batch")
+            batch_text = f", batch {batch}" if batch else ""
+            provider = (item.get("actual_provider") or "").replace("ExecutionProvider", "")
+            provider_text = f", {provider}" if provider else ""
+            if item.get("selected_provider") == "auto":
+                line = f"- {label}: {speedup}{batch_text}{provider_text}{sample_text}"
+                if self._stage_is_active_for_current_profile(item, stage_profile):
+                    gpu_lines.append(line)
+                else:
+                    inactive_gpu_lines.append(f"{line} ({self._inactive_stage_note(item)})")
+            else:
+                cpu_lines.append(self._format_calibration_cpu_line(label, item, speedup))
+
+        lines.append("GPU dùng với cấu hình hiện tại:")
+        lines.extend(gpu_lines or ["- Không có stage nào đạt ngưỡng"])
+        if inactive_gpu_lines:
+            lines.append("")
+            lines.append("GPU khả dụng khi đổi cấu hình:")
+            lines.extend(inactive_gpu_lines)
+        lines.append("")
+        lines.append("CPU giữ:")
+        lines.extend(cpu_lines or ["- Không có stage đo nào bị giữ CPU"])
+
+        if any(item.get("error") or item.get("error_detail") for item in details):
+            lines.append("")
+            lines.append("Chi tiết lỗi đầy đủ: temp/device_calibration_last.json")
+
+        advice = comparison.get("gpu_advice")
+        if advice:
+            lines.append("")
+            lines.append("Gợi ý: " + str(advice))
+
+        fixed = comparison.get("fixed_cpu_stages") or []
+        if fixed:
+            fixed_labels = []
+            fixed_map = {
+                "ASR encoder/decoder/joiner": "ASR",
+                "Audio decode / resample": "decode/resample",
+                "Silero VAD": "VAD",
+                "Speaker segmentation / VBx / clustering": "speaker postprocess",
+            }
+            for item in fixed:
+                label = item.get("label") or ""
+                fixed_labels.append(fixed_map.get(label, label or "stage CPU"))
+            lines.append("")
+            lines.append("Luôn CPU theo PWA: " + ", ".join(fixed_labels) + ".")
+        return "\n".join(lines)
+
     def _on_device_calibration_finished(self, report):
         selected = report.get("selected_execution_provider", "cpu")
-        self._set_execution_provider(selected)
+        stage_profile = report.get("stage_execution_providers") or {}
+        self._set_execution_provider(selected, stage_profile)
         self.btn_device_calibration.setEnabled(True)
 
         if report.get("status") == "no_gpu":
@@ -1675,17 +2005,36 @@ class FileProcessingTab(QWidget):
             return
 
         comparison = report.get("comparison") or {}
-        speedup = comparison.get("wall_speedup")
-        stage_speedups = comparison.get("stage_speedups") or {}
-        provider_text = "GPU auto" if selected == "auto" else "CPU-only"
+        provider_text = "GPU theo từng stage" if selected == "auto" else "CPU-only"
+        accepted = comparison.get("accepted_stage_count", 0)
+        measured = comparison.get("measured_stage_count", 0)
+        active_gpu = sum(
+            1
+            for item in comparison.get("stage_details") or []
+            if item.get("selected_provider") == "auto"
+            and self._stage_is_active_for_current_profile(item, stage_profile)
+        )
+        if selected != "auto" and active_gpu == 0 and accepted > 0:
+            provider_text = "CPU-only hiện tại; GPU khả dụng khi đổi cấu hình"
         self.label_device_accel.setText(provider_text)
+        stage_lines = self._format_stage_calibration_lines(comparison, stage_profile)
+        speedup_min = float(comparison.get("speedup_min") or 1.20)
+        if selected == "auto" and active_gpu > 0:
+            saved_text = "Đã lưu cấu hình. File chạy sau calibration sẽ dùng ngay cấu hình này."
+        elif accepted > 0:
+            saved_text = (
+                "Đã lưu kết quả tối ưu. Cấu hình hiện tại vẫn chạy CPU; "
+                "GPU sẽ dùng khi đổi sang stage/model đạt benchmark."
+            )
+        else:
+            saved_text = "Đã lưu cấu hình CPU-only cho máy này."
         self._calibration_info(
-            f"Tối ưu hoàn tất. Cấu hình được chọn: {provider_text}\n"
-            f"Tổng tăng tốc: {speedup or 'N/A'}x\n"
-            f"ASR: {stage_speedups.get('transcription_detail', 'N/A')}x, "
-            f"Diarization: {stage_speedups.get('diarization', 'N/A')}x, "
-            f"Thêm dấu: {stage_speedups.get('punctuation', 'N/A')}x\n"
-            f"Kiểm tra khớp: {'OK' if comparison.get('parity_ok') else 'không đạt, giữ CPU'}",
+            f"Tối ưu hoàn tất. Kết luận: {provider_text}\n"
+            f"GPU active hiện tại: {active_gpu} stage. Đạt benchmark: {accepted}/{measured} stage.\n"
+            f"{saved_text}\n\n"
+            f"Ngưỡng: inference GPU >= {speedup_min:.2f}x và diff đạt.\n"
+            "Số bên dưới là tốc độ inference stage, không phải thời gian xử lý cả file.\n\n"
+            + stage_lines,
         )
 
     def _on_device_calibration_error(self, message):

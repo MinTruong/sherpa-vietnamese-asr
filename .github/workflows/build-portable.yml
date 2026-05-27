@@ -94,7 +94,12 @@ jobs:
       - name: Build GPU add-ons
         if: ${{ github.event_name == 'push' || inputs.include_gpu_addons }}
         shell: pwsh
-        run: .\.envtietkiem\Scripts\python.exe build-portable/build_gpu_addons.py --all --no-zip
+        run: .\.envtietkiem\Scripts\python.exe build-portable/build_gpu_addons.py directml intel-openvino --no-zip
+
+      - name: Build GPU models
+        if: ${{ github.event_name == 'push' || inputs.include_gpu_addons }}
+        shell: pwsh
+        run: .\.envtietkiem\Scripts\python.exe build-portable/build_gpu_models.py --no-zip
 
       - name: Zip portable bundles
         shell: pwsh
@@ -133,17 +138,8 @@ jobs:
             }
             Remove-Item -LiteralPath $source.FullName -Force
           }
-          function Get-ArtifactName($DirName) {
-            if ($DirName -match '^desktop-portable-cpu-(.+)$') {
-              return "sherpa-vietnamese-asr-$($Matches[1]).zip"
-            }
-            if ($DirName -match '^server-portable-cpu-(.+)$') {
-              return "sherpa-vietnamese-asr-service-$($Matches[1]).zip"
-            }
-            return "$DirName.zip"
-          }
           Get-ChildItem -Path dist -Directory | ForEach-Object {
-            $zip = Join-Path artifacts (Get-ArtifactName $_.Name)
+            $zip = Join-Path artifacts "$($_.Name).zip"
             Compress-Archive -Path (Join-Path $_.FullName "*") -DestinationPath $zip -Force
             Split-LargeFile -Path $zip
           }
@@ -167,7 +163,7 @@ jobs:
           make_latest: true
           overwrite_files: true
 
-      - name: Remove old renamed release assets
+      - name: Remove obsolete release helper assets
         if: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '') }}
         shell: pwsh
         env:
@@ -179,26 +175,30 @@ jobs:
             Accept = "application/vnd.github+json"
             "X-GitHub-Api-Version" = "2022-11-28"
           }
-          $version = $env:RELEASE_TAG -replace '^v', ''
           $oldAssets = @(
-            "desktop-portable-cpu-$version.zip",
-            "server-portable-cpu-$version.zip"
+            "gpu-addon-nvidia-cuda-win64-*.zip",
+            "gpu-addon-nvidia-cuda-win64-*.zip.*",
+            "desktop-portable-cpu-*.zip",
+            "server-portable-cpu-*.zip"
           )
           $releaseUrl = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RELEASE_TAG"
           $release = Invoke-RestMethod -Headers $headers -Uri $releaseUrl
-          $hasSplitAssets = @($release.assets | Where-Object { $_.name -match '\.zip\.\d{3}$' }).Count -gt 0
-          if (-not $hasSplitAssets) {
+          $currentHasSplitAssets = @(Get-ChildItem -Path artifacts -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.zip\.\d{3}$' }).Count -gt 0
+          if (-not $currentHasSplitAssets) {
             $oldAssets += "README-recombine.txt"
+            $oldAssets += "*.zip.???"
           }
           foreach ($oldName in $oldAssets) {
-            $asset = $release.assets | Where-Object { $_.name -eq $oldName } | Select-Object -First 1
-            if (-not $asset) {
+            $matches = @($release.assets | Where-Object { $_.name -like $oldName })
+            if (-not $matches) {
               Write-Host "No existing release asset to delete: $oldName"
               continue
             }
-            $deleteUrl = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)"
-            Invoke-RestMethod -Method Delete -Headers $headers -Uri $deleteUrl
-            Write-Host "Deleted old release asset: $oldName"
+            foreach ($asset in $matches) {
+              $deleteUrl = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)"
+              Invoke-RestMethod -Method Delete -Headers $headers -Uri $deleteUrl
+              Write-Host "Deleted old release asset: $($asset.name)"
+            }
           }
 
       - name: Upload portable artifacts

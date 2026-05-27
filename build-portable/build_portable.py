@@ -8,6 +8,7 @@ Prerequisites:
     2. python build-portable/build_portable.py   # Build portable distribution
 """
 import io
+import importlib.util
 import os
 import sys
 import subprocess
@@ -20,13 +21,35 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.absolute()
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-sys.path.insert(0, str(PROJECT_ROOT))
-from core.version import get_version_short
-_VERSION = get_version_short()
+
+def _load_version_module():
+    spec = importlib.util.spec_from_file_location("_asr_vn_version", PROJECT_ROOT / "core" / "version.py")
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_version_short() -> str:
+    module = _load_version_module()
+    if module is None:
+        return "2.6.1"
+    return module.get_version_short()
+
+
+def _load_version() -> str:
+    module = _load_version_module()
+    if module is None:
+        return "unknown"
+    return module.get_version()
+
+
+_VERSION = _load_version_short()
 
 # Configuration
 VENV_DIR = PROJECT_ROOT / ".envtietkiem"
-DIST_DIR = PROJECT_ROOT / "dist" / f"desktop-portable-cpu-{_VERSION}"
+DIST_DIR = PROJECT_ROOT / "dist" / f"sherpa-vietnamese-asr-{_VERSION}"
 BUILD_DIR = PROJECT_ROOT / "build"
 FFMPEG_ZIP_URL = os.environ.get(
     "FFMPEG_ZIP_URL",
@@ -425,7 +448,7 @@ def copy_venv_packages():
         'opentelemetry_exporter_otlp_proto_grpc',
         'opentelemetry_exporter_otlp_proto_common',
         'opentelemetry_semantic_conventions',
-        'pygments', 'rich', 'colorlog', 'colorama',
+        'pygments', 'rich', 'colorlog',
         'coloredlogs', 'humanfriendly',
 
         # === Text processing not used ===
@@ -642,7 +665,7 @@ class AutoTokenizer:
         raise FileNotFoundError(f"Cannot load tokenizer from {path}")
 ''', encoding='utf-8')
 
-    print("[OK] Created stubs (numba, pooch, transformers)")
+    print("[OK] Created stubs (pooch, transformers)")
 
 
 def copy_pyd_files():
@@ -971,7 +994,8 @@ def copy_data():
     else:
         print("  [WARN] calibration sample not found")
 
-    # Clean vibert-capu: Desktop giữ int8, xóa fp32 (tiết kiệm 328MB)
+    # CPU-only app bundle: keep ViBERT INT8 for CPU runtime. ViBERT FP32 is
+    # delivered separately in gpu-models-win64-<version>.zip.
     vibert_dst = DIST_DIR / "models" / "vibert-capu"
     if vibert_dst.exists():
         VIBERT_KEEP = {'vibert-capu.int8.onnx', 'vocab.txt', 'config.json'}
@@ -986,7 +1010,7 @@ def copy_data():
             if d.is_dir() and not any(d.iterdir()):
                 d.rmdir()
         if removed > 0:
-            print(f"  [TRIM] vibert-capu: removed {removed:.0f} MB (kept int8.onnx, vocab.txt, config.json)")
+            print(f"  [TRIM] vibert-capu: removed {removed:.0f} MB (kept CPU int8.onnx + vocab/config)")
 
     # Clean pyannote PyTorch dir: keep only plda/ data (needed by pure ORT)
     pyannote_dst = DIST_DIR / "models" / "pyannote" / "speaker-diarization-community-1"
@@ -1018,9 +1042,18 @@ def copy_data():
                 print(f"  [DEL] {f.relative_to(models_dst)} ({size_mb:.1f} MB)")
                 f.unlink()
 
+        # GPU-only model variants are delivered by gpu-models-win64-<version>.zip.
+        for f in list(models_dst.rglob('*.gpu.onnx')):
+            size_mb = f.stat().st_size / 1024 / 1024
+            removed_total += size_mb
+            print(f"  [DEL] {f.relative_to(models_dst)} ({size_mb:.1f} MB) — GPU model package")
+            f.unlink()
+
         # Desktop build: Remove fp32 ONNX when int8 exists (desktop prefers int8)
         for model_dir in models_dst.iterdir():
             if not model_dir.is_dir():
+                continue
+            if model_dir.name == "vibert-capu":
                 continue
             int8_files = list(model_dir.glob('*int8*.onnx'))
             for int8f in int8_files:
@@ -1057,9 +1090,7 @@ def write_version_file():
     """Ghi VERSION file từ git describe (để portable build đọc version khi không có .git)."""
     print("[VER] Writing VERSION file...")
     try:
-        sys.path.insert(0, str(PROJECT_ROOT))
-        from core.version import get_version
-        version = get_version()
+        version = _load_version()
         (DIST_DIR / "VERSION").write_text(version, encoding='utf-8')
         print(f"[OK] VERSION = {version}")
     except Exception as e:

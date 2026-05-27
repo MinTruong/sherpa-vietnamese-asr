@@ -129,15 +129,15 @@
                     <span>Đang tải cấu hình...</span>
                 </div>
                 <div class="config-grid">
+                    <div class="config-row full-width calibration-row">
+                        <span id="calibration-status">Tối ưu: CPU-only</span>
+                        <button class="btn btn-sm btn-secondary" id="btn-calibration" type="button" onclick="runServerCalibration()">
+                            Tối ưu
+                        </button>
+                    </div>
                     <div class="config-row">
                         <label>Model ASR:</label>
                         <select id="cfg-model"></select>
-                    </div>
-                    <div class="config-row full-width calibration-row">
-                        <button class="btn btn-sm btn-secondary" id="btn-calibration" type="button" onclick="runServerCalibration()">
-                            Tối ưu thiết bị
-                        </button>
-                        <span id="calibration-status">Tăng tốc: CPU-only</span>
                     </div>
                     <div class="config-row">
                         <label>Thêm dấu:</label>
@@ -281,6 +281,25 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18,15 12,9 6,15"/></svg>
         </button>
     </main>
+
+    <div id="calibration-mode-modal" class="modal" style="display:none">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h3>Tối ưu thiết bị</h3>
+                <button class="modal-close" onclick="resolveCalibrationModeChoice('cancel')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="calibration-mode-text">Thiết bị hiện đang dùng cấu hình GPU Auto sau tối ưu.</p>
+                <p id="calibration-mode-subtext">Bạn có thể tối ưu lại hoặc chuyển về CPU-only.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="resolveCalibrationModeChoice('cancel')">Hủy</button>
+                <button class="btn btn-secondary" id="btn-calibration-mode-cpu" onclick="resolveCalibrationModeChoice('cpu')">CPU-only</button>
+                <button class="btn btn-secondary" id="btn-calibration-mode-gpu" onclick="resolveCalibrationModeChoice('gpu')">GPU auto</button>
+                <button class="btn btn-primary" onclick="resolveCalibrationModeChoice('rerun')">Tối ưu lại</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Login Modal -->
     <div id="login-modal" class="modal" style="display:none">

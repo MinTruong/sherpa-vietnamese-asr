@@ -38,6 +38,19 @@ logger = logging.getLogger("asr.server")
 _revoked_tokens: dict[str, float] = {}
 
 
+def _stage_execution_provider_config(value=None):
+    raw = server_config.get("stage_execution_providers") if value is None else value
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
 def _revoke_token(token: str, exp: float):
     """Thêm token vào danh sách bị thu hồi."""
     _revoked_tokens[token] = exp
@@ -411,6 +424,7 @@ async def get_defaults():
         "diarization_threshold": int(server_config.get("default_diarization_threshold")),
         # merge_short_speaker removed — NaturalTurn luôn bật
         "execution_provider": server_config.get("execution_provider") or "cpu",
+        "stage_execution_providers": _stage_execution_provider_config(),
         "max_upload_mb": int(server_config.get("max_upload_mb")),
         "offline_download_url": server_config.get("offline_download_url"),
     }
@@ -423,6 +437,7 @@ async def calibration_status():
 
     status = await asyncio.to_thread(detect_calibration_status)
     status["current_execution_provider"] = server_config.get("execution_provider") or "cpu"
+    status["current_stage_execution_providers"] = _stage_execution_provider_config()
     return status
 
 
@@ -448,10 +463,45 @@ async def calibration_run(request: Request):
         True,
     )
     selected = report.get("selected_execution_provider") or "cpu"
+    stage_profile = report.get("stage_execution_providers") or {}
     server_config.set("execution_provider", selected)
+    server_config.set(
+        "stage_execution_providers",
+        json.dumps(stage_profile, ensure_ascii=False, sort_keys=True),
+    )
     server_config.save()
     report["current_execution_provider"] = selected
+    report["current_stage_execution_providers"] = stage_profile
     return report
+
+
+@app.post("/api/calibration/cpu-only")
+async def calibration_cpu_only():
+    """Switch runtime to CPU-only while preserving the last calibrated GPU profile."""
+    if queue_manager.is_processing:
+        raise HTTPException(409, "Đang xử lý file khác. Vui lòng đợi xong rồi đổi chế độ tối ưu.")
+    server_config.set("execution_provider", "cpu")
+    server_config.save()
+    return {
+        "current_execution_provider": "cpu",
+        "current_stage_execution_providers": _stage_execution_provider_config(),
+    }
+
+
+@app.post("/api/calibration/gpu-auto")
+async def calibration_gpu_auto():
+    """Switch runtime back to the saved calibrated GPU profile."""
+    if queue_manager.is_processing:
+        raise HTTPException(409, "Đang xử lý file khác. Vui lòng đợi xong rồi đổi chế độ tối ưu.")
+    stage_profile = _stage_execution_provider_config()
+    if not any(str(value).lower() == "auto" for value in stage_profile.values()):
+        raise HTTPException(400, "Chưa có kết quả tối ưu GPU đã lưu. Hãy chạy Tối ưu trước.")
+    server_config.set("execution_provider", "auto")
+    server_config.save()
+    return {
+        "current_execution_provider": "auto",
+        "current_stage_execution_providers": stage_profile,
+    }
 
 
 # === Session API ===
@@ -823,6 +873,7 @@ async def process_file(
                                           int(server_config.get("default_diarization_threshold"))),
 
         "execution_provider": body.get("execution_provider", server_config.get("execution_provider") or "cpu"),
+        "stage_execution_providers": _stage_execution_provider_config(body.get("stage_execution_providers")),
         "rms_normalize": body.get("rms_normalize", False),
         "bypass_vad": body.get("bypass_vad", False),
     }
@@ -1896,7 +1947,9 @@ _CONFIG_VALIDATORS = {
     "summarizer_threads": lambda v: 1 <= int(v) <= 128,
     "summarizer_context_size": lambda v: 1024 <= int(v) <= 262144,
     "summarizer_enabled": lambda v: v in ("0", "1"),
-    "execution_provider": lambda v: str(v).lower() in ("cpu", "auto", "cuda", "openvino", "directml", "dml", "rocm"),
+    "execution_provider": lambda v: str(v).lower() in (
+        "cpu", "auto", "cuda", "nvidia", "openvino", "intel", "directml", "dml", "amd", "rocm"
+    ),
 }
 _CONFIG_READONLY = {"admin_password_hash", "host"}
 

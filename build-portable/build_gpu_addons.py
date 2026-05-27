@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import shutil
@@ -16,29 +17,35 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 BUILD_ROOT = PROJECT_ROOT / "build" / "gpu-addon-envs"
 DIST_ROOT = PROJECT_ROOT / "dist"
 
-sys.path.insert(0, str(PROJECT_ROOT))
-from core.version import get_version_short  # noqa: E402
+def _load_version_short() -> str:
+    spec = importlib.util.spec_from_file_location("_asr_vn_version", PROJECT_ROOT / "core" / "version.py")
+    if spec is None or spec.loader is None:
+        return "2.6.1"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.get_version_short()
 
-VERSION = get_version_short()
+
+VERSION = _load_version_short()
 
 ADDONS = {
     "nvidia-cuda": {
         "artifact": "gpu-addon-nvidia-cuda-win64",
         "label": "NVIDIA CUDA",
         "provider": "CUDAExecutionProvider",
-        "packages": ["onnxruntime-gpu[cuda,cudnn]"],
+        "packages": ["onnxruntime-gpu[cuda,cudnn]", "onnx"],
     },
     "directml": {
         "artifact": "gpu-addon-directml-win64",
-        "label": "DirectML",
+        "label": "DirectML (NVIDIA/AMD)",
         "provider": "DmlExecutionProvider",
-        "packages": ["onnxruntime-directml"],
+        "packages": ["onnxruntime-directml", "onnx"],
     },
     "intel-openvino": {
         "artifact": "gpu-addon-intel-openvino-win64",
         "label": "Intel OpenVINO",
         "provider": "OpenVINOExecutionProvider",
-        "packages": ["onnxruntime-openvino==1.24.1", "openvino==2025.4.1"],
+        "packages": ["onnxruntime-openvino==1.24.1", "openvino==2025.4.1", "onnx"],
     },
 }
 

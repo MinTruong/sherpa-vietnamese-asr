@@ -333,6 +333,8 @@ class MainWindow(QMainWindow):
                     file_tab.label_device_accel.setText(
                         "GPU auto" if execution_provider == "auto" else "CPU-only"
                     )
+                if hasattr(file_tab, '_refresh_save_ram_state'):
+                    file_tab._refresh_save_ram_state()
 
                 # Auto analyze quality setting
             finally:

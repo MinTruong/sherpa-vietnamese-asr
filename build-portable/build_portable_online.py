@@ -7,6 +7,7 @@ Usage: python build-portable/build_portable_online.py
 """
 import io
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -34,12 +35,29 @@ from build_portable import (
     get_venv_path, clean_build, calculate_size, ensure_ffmpeg_tools, ensure_offline_models,
 )
 
-sys.path.insert(0, str(PROJECT_ROOT))
-from core.version import get_version_short
-_VERSION = get_version_short()
+
+def _load_version_short() -> str:
+    spec = importlib.util.spec_from_file_location("_asr_vn_version", PROJECT_ROOT / "core" / "version.py")
+    if spec is None or spec.loader is None:
+        return "2.6.1"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.get_version_short()
+
+
+def _load_version() -> str:
+    spec = importlib.util.spec_from_file_location("_asr_vn_version", PROJECT_ROOT / "core" / "version.py")
+    if spec is None or spec.loader is None:
+        return "unknown"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.get_version()
+
+
+_VERSION = _load_version_short()
 
 # Override output directory
-DIST_DIR_ONLINE = PROJECT_ROOT / "dist" / f"server-portable-cpu-{_VERSION}"
+DIST_DIR_ONLINE = PROJECT_ROOT / "dist" / f"sherpa-vietnamese-asr-service-{_VERSION}"
 
 # Source files cho ban online (KHONG co tab_live, streaming)
 ONLINE_SOURCE_FILES = [
@@ -126,7 +144,7 @@ EXCLUDE_PACKAGES_SERVICES = {
     'opentelemetry_exporter_otlp_proto_grpc',
     'opentelemetry_exporter_otlp_proto_common',
     'opentelemetry_semantic_conventions',
-    'pygments', 'rich', 'colorlog', 'colorama',
+    'pygments', 'rich', 'colorlog',
 
     # === transformers + deps — replaced by minimal stub ===
     'transformers',
@@ -394,10 +412,13 @@ def copy_models_online():
             continue
         print(f"  [OK] {item.name}")
 
-    # Clean vibert-capu: keep only onnx + vocab + config
+    # The service bundle also hosts the offline PWA. The PWA currently uses the
+    # ViBERT FP32 ONNX model as a required browser-side punctuation asset, so
+    # service keeps FP32 + INT8. Desktop remains CPU-only and gets FP32 from the
+    # optional gpu-models package.
     vibert_dst = models_dst / "vibert-capu"
     if vibert_dst.exists():
-        VIBERT_KEEP = {'vibert-capu.onnx', 'vocab.txt', 'config.json'}
+        VIBERT_KEEP = {'vibert-capu.onnx', 'vibert-capu.int8.onnx', 'vocab.txt', 'config.json'}
         removed = 0
         for f in list(vibert_dst.rglob('*')):
             if f.is_file() and f.name not in VIBERT_KEEP:
@@ -407,7 +428,7 @@ def copy_models_online():
             if d.is_dir() and not any(d.iterdir()):
                 d.rmdir()
         if removed > 0:
-            print(f"  [TRIM] vibert-capu: removed {removed:.0f} MB")
+            print(f"  [TRIM] vibert-capu: removed {removed:.0f} MB (kept CPU int8.onnx + vocab/config)")
 
     # Clean pyannote: keep only plda/ (remove pytorch_model.bin)
     pyannote_dst = models_dst / "pyannote" / "speaker-diarization-community-1"
@@ -432,9 +453,17 @@ def copy_models_online():
             removed_total += size_mb
             print(f"  [DEL] {f.relative_to(models_dst)} ({size_mb:.1f} MB)")
             f.unlink()
+    # GPU-only model variants are delivered by gpu-models-win64-<version>.zip.
+    for f in list(models_dst.rglob('*.gpu.onnx')):
+        size_mb = f.stat().st_size / 1024 / 1024
+        removed_total += size_mb
+        print(f"  [DEL] {f.relative_to(models_dst)} ({size_mb:.1f} MB) — GPU model package")
+        f.unlink()
     # Remove int8 duplicates when fp32 exists
     for model_dir in models_dst.iterdir():
         if not model_dir.is_dir():
+            continue
+        if model_dir.name == "vibert-capu":
             continue
         for int8f in list(model_dir.glob('*int8*.onnx')):
             fp32_name = int8f.name.replace('.int8', '')
@@ -856,9 +885,7 @@ def main():
         # Write VERSION file (auto from git)
         print("[VER] Writing VERSION file...")
         try:
-            sys.path.insert(0, str(PROJECT_ROOT))
-            from core.version import get_version
-            version = get_version()
+            version = _load_version()
             (DIST_DIR_ONLINE / "VERSION").write_text(version, encoding='utf-8')
             print(f"[OK] VERSION = {version}")
         except Exception as e:
@@ -966,7 +993,7 @@ def main():
         required_pkgs = [
             "fastapi", "uvicorn", "starlette", "sherpa_onnx",
             "numpy", "onnxruntime", "cryptography",
-            "jose",
+            "jose", "umap", "hdbscan", "pynndescent",
         ]
         missing = []
         for f in critical:

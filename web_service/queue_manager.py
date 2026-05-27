@@ -400,10 +400,19 @@ class QueueManager:
             raw_num_speakers = int(config.get("num_speakers", 0))
             num_speakers = -1 if raw_num_speakers <= 0 else raw_num_speakers
             execution_provider = config.get("execution_provider") or server_config.get("execution_provider") or "cpu"
+            stage_execution_providers = config.get("stage_execution_providers")
+            if stage_execution_providers is None:
+                stage_execution_providers = server_config.get("stage_execution_providers") or "{}"
+            if isinstance(stage_execution_providers, str):
+                try:
+                    stage_execution_providers = json.loads(stage_execution_providers) if stage_execution_providers else {}
+                except Exception:
+                    stage_execution_providers = {}
 
             pipeline_config = {
                 "cpu_threads": server_config.cpu_threads,
                 "execution_provider": execution_provider,
+                "stage_execution_providers": stage_execution_providers,
                 "restore_punctuation": True,  # Luon True giong desktop, bypass_restorer xu ly skip
                 "bypass_restorer": bypass_restorer,
                 "punctuation_confidence": punct_confidence,

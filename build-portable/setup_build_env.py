@@ -55,6 +55,7 @@ def install_packages():
         "PyQt6",
         "psutil",
         "sentencepiece",
+        "onnx",                     # Build-time CAM++ GPU graph patcher
         "onnxruntime",
         "requests",
         "tqdm",
@@ -67,6 +68,9 @@ def install_packages():
         "kaldi_native_fbank",        # Feature extraction for ONNX
         "pydub",                     # Audio format conversion
         "scikit-learn",              # AHC clustering for ONNX
+        "umap-learn",                # CAM++ Senko UMAP+HDBSCAN clustering
+        "pynndescent",               # UMAP nearest-neighbor dependency
+        "hdbscan",                   # CAM++ Senko clustering backend
         "filelock",                  # Thread-safe vocabulary processing
         # Web service dependencies (for service build)
         "fastapi",

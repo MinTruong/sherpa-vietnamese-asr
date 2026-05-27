@@ -456,7 +456,75 @@ function updateCalibrationStatus(provider) {
     const el = document.getElementById('calibration-status');
     if (!el) return;
     const value = (provider || 'cpu').toLowerCase();
-    el.textContent = value === 'auto' ? 'Tăng tốc: GPU auto' : 'Tăng tốc: CPU-only';
+    el.textContent = value === 'auto' ? 'Tối ưu: GPU auto' : 'Tối ưu: CPU-only';
+}
+
+function hasGpuAutoConfig() {
+    if ((window.appConfig?.execution_provider || 'cpu').toLowerCase() === 'auto') return true;
+    const stageProfile = window.appConfig?.stage_execution_providers || {};
+    return Object.values(stageProfile).some((value) => String(value).toLowerCase() === 'auto');
+}
+
+function isGpuAutoMode() {
+    return (window.appConfig?.execution_provider || 'cpu').toLowerCase() === 'auto';
+}
+
+let calibrationModeChoiceResolver = null;
+
+function chooseCalibrationMode() {
+    const modal = document.getElementById('calibration-mode-modal');
+    if (!modal) return Promise.resolve('rerun');
+    const gpuAuto = isGpuAutoMode();
+    const textEl = document.getElementById('calibration-mode-text');
+    const subtextEl = document.getElementById('calibration-mode-subtext');
+    const cpuBtn = document.getElementById('btn-calibration-mode-cpu');
+    const gpuBtn = document.getElementById('btn-calibration-mode-gpu');
+    if (textEl) {
+        textEl.textContent = gpuAuto
+            ? 'Thiết bị hiện đang dùng GPU Auto theo kết quả tối ưu đã lưu.'
+            : 'Thiết bị hiện đang dùng CPU-only, nhưng vẫn còn kết quả tối ưu GPU đã lưu.';
+    }
+    if (subtextEl) {
+        subtextEl.textContent = gpuAuto
+            ? 'Bạn có thể tối ưu lại hoặc chuyển về CPU-only.'
+            : 'Bạn có thể bật lại GPU auto hoặc tối ưu lại.';
+    }
+    if (cpuBtn) cpuBtn.style.display = gpuAuto ? '' : 'none';
+    if (gpuBtn) gpuBtn.style.display = gpuAuto ? 'none' : '';
+    modal.style.display = 'flex';
+    return new Promise((resolve) => {
+        calibrationModeChoiceResolver = resolve;
+    });
+}
+
+function resolveCalibrationModeChoice(choice) {
+    const modal = document.getElementById('calibration-mode-modal');
+    if (modal) modal.style.display = 'none';
+    const resolver = calibrationModeChoiceResolver;
+    calibrationModeChoiceResolver = null;
+    if (resolver) resolver(choice || 'cancel');
+}
+
+async function setServerCpuOnly() {
+    const result = await apiFetch('/api/calibration/cpu-only', {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+    window.appConfig.execution_provider = 'cpu';
+    window.appConfig.stage_execution_providers = result.current_stage_execution_providers || window.appConfig.stage_execution_providers || {};
+    updateCalibrationStatus('cpu');
+    showToast('Đã chuyển sang CPU-only. Kết quả tối ưu GPU vẫn được giữ lại.', 'success');
+}
+
+async function setServerGpuAuto() {
+    const result = await apiFetch('/api/calibration/gpu-auto', {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+    window.appConfig.execution_provider = 'auto';
+    window.appConfig.stage_execution_providers = result.current_stage_execution_providers || window.appConfig.stage_execution_providers || {};
+    updateCalibrationStatus('auto');
+    showToast('Đã chuyển sang GPU auto', 'success');
 }
 
 function calibrationHardwareText(status) {
@@ -468,21 +536,229 @@ function calibrationHardwareText(status) {
     return text;
 }
 
+function gpuModelsDownloadHint(gpuModels) {
+    if (!gpuModels || gpuModels.installed) return '';
+    const missing = gpuModels.missing_paths || gpuModels.expected_paths || [];
+    const expected = missing
+        .map((item) => item.display_path || item.relative_path || '')
+        .filter(Boolean)
+        .map((path) => `- ${path}`)
+        .join('\n');
+    return `\n\nHãy tải thêm: ${gpuModels.zip_name || 'gpu-models-win64-<version>.zip'}` +
+        '\nGiải nén vào thư mục gốc của ứng dụng.' +
+        (expected ? `\nSau khi giải nén phải có:\n${expected}` : '');
+}
+
+function formatCalibrationNumber(value, suffix = '') {
+    if (value === null || value === undefined || value === '') return 'N/A';
+    const number = Number(value);
+    if (!Number.isFinite(number)) return String(value);
+    if (Math.abs(number) < 0.001 && number !== 0) return number.toExponential(2) + suffix;
+    return number.toFixed(3) + suffix;
+}
+
+function shortCalibrationStageLabel(item) {
+    const key = item.key || '';
+    const label = item.label || key || 'Stage';
+    const labels = {
+        speaker_campp_embedding: 'CAM++ embedding',
+        speaker_pyannote_embedding: 'Pyannote embedding',
+        dnsmos: 'DNSMOS',
+        punctuation: 'Punctuation',
+    };
+    if (labels[key]) return labels[key];
+    return label
+        .replace('Speaker Diarization: ', '')
+        .replace('Pyannote embedding encoder', 'Pyannote embedding')
+        .replace('Punctuation: ViBERT punctuation fp32', 'Punctuation')
+        .replace('DNSMOS quality', 'DNSMOS');
+}
+
+function shortCalibrationReason(item) {
+    if (item.missing) return 'thiếu model';
+    const reasons = {
+        accepted: 'đạt',
+        diff_exceeds_tolerance: 'diff vượt ngưỡng',
+        gpu_not_faster_enough: 'GPU chưa nhanh hơn 20%',
+        gpu_batch_tune_failed: 'batch tune lỗi',
+        model_missing: 'thiếu model',
+        provider_unavailable: 'provider GPU chưa sẵn sàng',
+        gpu_provider_fell_back_to_cpu: 'ORT fallback về CPU',
+        provider_runtime_unsupported: 'ORT/DirectML lỗi runtime',
+    };
+    if (reasons[item.reason]) return reasons[item.reason];
+    if (item.error) return 'lỗi benchmark';
+    if (item.skipped || item.speedup === null || item.speedup === undefined) {
+        return item.reason || 'không đo GPU';
+    }
+    return item.reason || 'GPU không đạt ngưỡng';
+}
+
+function shortCalibrationError(item, maxLen = 220) {
+    const retries = item.provider_retries || [];
+    let text = item.error || item.error_detail || (retries.length ? retries[retries.length - 1].error : '') || '';
+    if (!text) return '';
+    text = String(text).replace(/\s+/g, ' ').trim();
+    const replacements = {
+        'requested DmlExecutionProvider but ORT created CPUExecutionProvider':
+            'ORT fallback: requested DmlExecutionProvider, actual CPUExecutionProvider',
+        'requested CUDAExecutionProvider but ORT created CPUExecutionProvider':
+            'ORT fallback: requested CUDAExecutionProvider, actual CPUExecutionProvider',
+        'requested OpenVINOExecutionProvider but ORT created CPUExecutionProvider':
+            'ORT fallback: requested OpenVINOExecutionProvider, actual CPUExecutionProvider',
+    };
+    for (const [needle, replacement] of Object.entries(replacements)) {
+        if (text.includes(needle)) {
+            text = text === needle ? replacement : text.replace(needle, replacement);
+            break;
+        }
+    }
+    return text.length > maxLen ? text.slice(0, maxLen).trimEnd() + '...' : text;
+}
+
+function formatCalibrationCpuLine(label, item, speedupText = '') {
+    const parts = [shortCalibrationReason(item)];
+    const error = shortCalibrationError(item);
+    if (error) parts.push(`lỗi: ${error}`);
+    const text = parts.filter(Boolean).join('; ');
+    return speedupText ? `- ${label}: ${speedupText}, ${text}` : `- ${label}: ${text}`;
+}
+
+function calibrationStageActiveForCurrentProfile(item, stageProfile = {}) {
+    const key = item.key || '';
+    const pipelineKey = item.pipeline_key || key;
+    if (key === 'speaker_campp_embedding') {
+        return stageProfile.diarization === 'auto' && stageProfile.diarization_campp === 'auto';
+    }
+    if (key === 'speaker_pyannote_embedding') {
+        return stageProfile.diarization === 'auto' && stageProfile.diarization_pyannote === 'auto';
+    }
+    return stageProfile[pipelineKey] === 'auto';
+}
+
+function inactiveCalibrationStageNote(item) {
+    const key = item.key || '';
+    if (key === 'speaker_campp_embedding') return 'khi chọn CAM++';
+    if (key === 'speaker_pyannote_embedding') return 'khi chọn Pyannote';
+    return 'khi bật stage này';
+}
+
+function formatCalibrationStageLines(comparison, stageProfile = {}) {
+    const lines = [];
+    const gpuLines = [];
+    const inactiveGpuLines = [];
+    const cpuLines = [];
+    const details = comparison?.stage_details || [];
+    for (const item of details) {
+        const label = shortCalibrationStageLabel(item);
+        const speedup = formatCalibrationNumber(item.speedup, 'x');
+        const sampleText = item.sample_items && item.sample_items_total
+            ? `, mẫu ${item.sample_items}/${item.sample_items_total}`
+            : '';
+        if (item.skipped || item.speedup === null || item.speedup === undefined) {
+            cpuLines.push(formatCalibrationCpuLine(label, item));
+            continue;
+        }
+        const batchText = item.batch ? `, batch ${item.batch}` : '';
+        const provider = (item.actual_provider || '').replace('ExecutionProvider', '');
+        const providerText = provider ? `, ${provider}` : '';
+        if (item.selected_provider === 'auto') {
+            const line = `- ${label}: ${speedup}${batchText}${providerText}${sampleText}`;
+            if (calibrationStageActiveForCurrentProfile(item, stageProfile)) {
+                gpuLines.push(line);
+            } else {
+                inactiveGpuLines.push(`${line} (${inactiveCalibrationStageNote(item)})`);
+            }
+        } else {
+            cpuLines.push(formatCalibrationCpuLine(label, item, speedup));
+        }
+    }
+
+    lines.push('GPU dùng với cấu hình hiện tại:');
+    lines.push(...(gpuLines.length ? gpuLines : ['- Không có stage nào đạt ngưỡng']));
+    if (inactiveGpuLines.length) {
+        lines.push('');
+        lines.push('GPU khả dụng khi đổi cấu hình:');
+        lines.push(...inactiveGpuLines);
+    }
+    lines.push('');
+    lines.push('CPU giữ:');
+    lines.push(...(cpuLines.length ? cpuLines : ['- Không có stage đo nào bị giữ CPU']));
+
+    if (details.some((item) => item.error || item.error_detail)) {
+        lines.push('');
+        lines.push('Chi tiết lỗi đầy đủ: temp/device_calibration_last.json');
+    }
+
+    if (comparison?.gpu_advice) {
+        lines.push('');
+        lines.push('Gợi ý: ' + comparison.gpu_advice);
+    }
+
+    const fixed = comparison?.fixed_cpu_stages || [];
+    if (fixed.length) {
+        const fixedMap = {
+            'ASR encoder/decoder/joiner': 'ASR',
+            'Audio decode / resample': 'decode/resample',
+            'Silero VAD': 'VAD',
+            'Speaker segmentation / VBx / clustering': 'speaker postprocess',
+        };
+        const fixedLabels = fixed.map((item) => fixedMap[item.label] || item.label || 'stage CPU');
+        lines.push('');
+        lines.push(`Luôn CPU theo PWA: ${fixedLabels.join(', ')}.`);
+    }
+    return lines.join('\n');
+}
+
 async function runServerCalibration() {
     const btn = document.getElementById('btn-calibration');
     const statusEl = document.getElementById('calibration-status');
+    if (hasGpuAutoConfig()) {
+        const choice = await chooseCalibrationMode();
+        if (choice === 'cpu') {
+            try {
+                if (btn) btn.disabled = true;
+                if (statusEl) statusEl.textContent = 'Tối ưu: đang chuyển CPU-only...';
+                await setServerCpuOnly();
+            } catch (e) {
+                updateCalibrationStatus(window.appConfig?.execution_provider || 'cpu');
+                showToast('Không chuyển được CPU-only: ' + e.message, 'error');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+            return;
+        }
+        if (choice === 'gpu') {
+            try {
+                if (btn) btn.disabled = true;
+                if (statusEl) statusEl.textContent = 'Tối ưu: đang bật GPU auto...';
+                await setServerGpuAuto();
+            } catch (e) {
+                updateCalibrationStatus(window.appConfig?.execution_provider || 'cpu');
+                showToast('Không bật được GPU auto: ' + e.message, 'error');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+            return;
+        }
+        if (choice !== 'rerun') {
+            return;
+        }
+    }
     if (btn) btn.disabled = true;
     if (statusEl) statusEl.textContent = 'Đang kiểm tra phần cứng...';
 
     try {
         const status = await apiFetch('/api/calibration/status');
         const addon = status.recommended_addon || null;
+        const gpuModels = status.recommended_gpu_models || null;
         if (addon && !addon.installed && !status.provider_ready) {
             window.appConfig.execution_provider = 'cpu';
             updateCalibrationStatus('cpu');
-            const expected = addon.expected_display_path || `/gpu_addons/${addon.id || '<id>'}/Lib/site-packages/onnxruntime/`;
+            let expected = addon.expected_display_path || `/gpu_addons/${addon.id || '<id>'}/Lib/site-packages/onnxruntime/`;
+            expected += gpuModelsDownloadHint(gpuModels);
             alert(
-                'Phát hiện GPU nhưng chưa có gói tăng tốc phù hợp.\n\n' +
+                'Phát hiện GPU nhưng chưa có gói tối ưu GPU phù hợp.\n\n' +
                 calibrationHardwareText(status) +
                 `\n\nHãy tải: ${addon.zip_name || (addon.artifact + '-<version>.zip')}` +
                 '\nGiải nén vào thư mục gốc của ứng dụng.' +
@@ -496,11 +772,22 @@ async function runServerCalibration() {
             updateCalibrationStatus('cpu');
             const expected = addon.expected_display_path || `/gpu_addons/${addon.id || '<id>'}/Lib/site-packages/onnxruntime/`;
             alert(
-                'Đã thấy gói tăng tốc nhưng ONNX Runtime chưa nạp được provider GPU.\n\n' +
+                'Đã thấy gói tối ưu GPU nhưng ONNX Runtime chưa nạp được provider GPU.\n\n' +
                 calibrationHardwareText(status) +
                 `\n\nĐường dẫn cần có trong thư mục gốc của ứng dụng: ${expected}` +
                 '\nHãy đóng hẳn server/app, mở lại rồi bấm Tối ưu thiết bị.' +
                 '\nNếu vẫn lỗi, hãy xóa thư mục /gpu_addons/ rồi giải nén lại gói phù hợp vào đúng thư mục gốc của ứng dụng.'
+            );
+            return;
+        }
+        if (gpuModels && !gpuModels.installed) {
+            window.appConfig.execution_provider = 'cpu';
+            updateCalibrationStatus('cpu');
+            alert(
+                'Phát hiện GPU và gói tối ưu GPU đã sẵn sàng, nhưng còn thiếu model GPU cho ViBERT.\n\n' +
+                calibrationHardwareText(status) +
+                gpuModelsDownloadHint(gpuModels) +
+                '\nSau đó mở lại server/app và bấm Tối ưu thiết bị.'
             );
             return;
         }
@@ -512,7 +799,7 @@ async function runServerCalibration() {
         }
 
         const ok = confirm(
-            'Phát hiện GPU có thể tăng tốc.\n\n' +
+            'Phát hiện GPU có thể tối ưu xử lý.\n\n' +
             calibrationHardwareText(status) +
             `\nProvider đề xuất: ${status.preferred_provider || 'GPU'}\n\n` +
             'Chạy tối ưu bằng file mẫu 10 phút? Quá trình này có thể mất vài phút.'
@@ -533,17 +820,34 @@ async function runServerCalibration() {
 
         const selected = report.current_execution_provider || report.selected_execution_provider || 'cpu';
         window.appConfig.execution_provider = selected;
+        window.appConfig.stage_execution_providers = report.current_stage_execution_providers || report.stage_execution_providers || {};
         updateCalibrationStatus(selected);
 
         const cmp = report.comparison || {};
-        const stages = cmp.stage_speedups || {};
+        const accepted = cmp.accepted_stage_count || 0;
+        const measured = cmp.measured_stage_count || 0;
+        let providerText = selected === 'auto' ? 'GPU theo từng stage' : 'CPU-only';
+        const stageProfile = window.appConfig.stage_execution_providers || {};
+        const activeGpu = (cmp.stage_details || []).filter(
+            (item) => item.selected_provider === 'auto' && calibrationStageActiveForCurrentProfile(item, stageProfile)
+        ).length;
+        if (selected !== 'auto' && activeGpu === 0 && accepted > 0) {
+            providerText = 'CPU-only hiện tại; GPU khả dụng khi đổi cấu hình';
+        }
+        const stageLines = formatCalibrationStageLines(cmp, stageProfile);
+        const speedupMin = Number(cmp.speedup_min || 1.20);
+        const savedText = selected === 'auto' && activeGpu > 0
+            ? 'Đã lưu cấu hình. File chạy sau calibration sẽ dùng ngay cấu hình này.'
+            : accepted > 0
+                ? 'Đã lưu kết quả tối ưu. Cấu hình hiện tại vẫn chạy CPU; GPU sẽ dùng khi đổi sang stage/model đạt benchmark.'
+                : 'Đã lưu cấu hình CPU-only cho máy này.';
         alert(
-            `Tối ưu hoàn tất. Cấu hình được chọn: ${selected === 'auto' ? 'GPU auto' : 'CPU-only'}\n` +
-            `Tổng tăng tốc: ${cmp.wall_speedup || 'N/A'}x\n` +
-            `ASR: ${stages.transcription_detail || 'N/A'}x, ` +
-            `Diarization: ${stages.diarization || 'N/A'}x, ` +
-            `Thêm dấu: ${stages.punctuation || 'N/A'}x\n` +
-            `Kiểm tra khớp: ${cmp.parity_ok ? 'OK' : 'không đạt, giữ CPU'}`
+            `Tối ưu hoàn tất. Kết luận: ${providerText}\n` +
+            `GPU active hiện tại: ${activeGpu} stage. Đạt benchmark: ${accepted}/${measured} stage.\n` +
+            `${savedText}\n\n` +
+            `Ngưỡng: inference GPU >= ${speedupMin.toFixed(2)}x và diff đạt.\n` +
+            'Số bên dưới là tốc độ inference stage, không phải thời gian xử lý cả file.\n\n' +
+            stageLines
         );
     } catch (e) {
         updateCalibrationStatus(window.appConfig?.execution_provider || 'cpu');
@@ -649,6 +953,7 @@ function getASRConfig() {
         case_confidence: parseInt(document.getElementById('cfg-case').value),
         diarization_threshold: parseInt(document.getElementById('cfg-threshold').value),
         execution_provider: window.appConfig?.execution_provider || 'cpu',
+        stage_execution_providers: window.appConfig?.stage_execution_providers || {},
         gap_recover: false,
         rms_normalize: document.getElementById('cfg-rms-normalize').checked,
         bypass_vad: document.getElementById('cfg-bypass-vad').checked,

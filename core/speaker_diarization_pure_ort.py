@@ -441,21 +441,11 @@ class PureOrtDiarizer:
         seg_model = os.path.join(self.onnx_dir, "segmentation-community-1.onnx")
         # Cache optimized graph: giảm disk I/O lần load sau
         opts_seg.optimized_model_filepath = seg_model + ".opt"
-        if str(self.execution_provider).lower() not in ("cpu", "none", "off"):
-            from core.hardware_accel import create_ort_session, auto_batch_size
-            self.seg_sess, seg_provider = create_ort_session(
-                ort, seg_model, opts_seg,
-                policy=self.execution_provider,
-                stage="Pyannote Community-1 segmentation",
-            )
-            self.segmentation_batch_size = auto_batch_size(
-                "Pyannote Community-1 segmentation", self.segmentation_batch_size,
-                seg_provider.get("actual_provider"),
-            )
-            logger.info(f"[PureORT] segmentation provider={seg_provider}")
-        else:
-            prov = ['CPUExecutionProvider']
-            self.seg_sess = ort.InferenceSession(seg_model, opts_seg, providers=prov)
+        # Keep segmentation on CPU. GPU calibration only covers embedding;
+        # segmentation/VBx/clustering stay CPU to match the PWA profile.
+        prov = ['CPUExecutionProvider']
+        self.seg_sess = ort.InferenceSession(seg_model, opts_seg, providers=prov)
+        logger.info("[PureORT] segmentation provider={'actual_provider': 'CPUExecutionProvider'}")
 
         # Use encoder-only model (frame features) + external masked pooling + Gemm
         encoder_path = os.path.join(self.onnx_dir, "embedding_encoder.onnx")

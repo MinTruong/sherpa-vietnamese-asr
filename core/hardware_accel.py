@@ -7,6 +7,7 @@ is present, verify that ORT actually used it, and fall back to CPU otherwise.
 from __future__ import annotations
 
 import csv
+import importlib.util
 import os
 import platform
 import site
@@ -33,7 +34,7 @@ GPU_ADDON_DEFS: Dict[str, Dict[str, str]] = {
     "directml": {
         "artifact": "gpu-addon-directml-win64",
         "provider": DML_PROVIDER,
-        "label": "DirectML",
+        "label": "DirectML (NVIDIA/AMD)",
     },
     "intel-openvino": {
         "artifact": "gpu-addon-intel-openvino-win64",
@@ -45,6 +46,15 @@ GPU_ADDON_DEFS: Dict[str, Dict[str, str]] = {
 
 def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
+
+
+def _version_short() -> str:
+    spec = importlib.util.spec_from_file_location("_asr_vn_version", project_root() / "core" / "version.py")
+    if spec is None or spec.loader is None:
+        return "<version>"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.get_version_short()
 
 
 def gpu_addon_site_package_candidates(addon_id: str) -> List[Path]:
@@ -65,6 +75,13 @@ def gpu_addon_site_packages(addon_id: str) -> Path:
 
 def gpu_addon_expected_onnxruntime_path(addon_id: str) -> Path:
     return gpu_addon_site_packages(addon_id) / "onnxruntime"
+
+
+def gpu_addon_installed(addon_id: str) -> bool:
+    try:
+        return gpu_addon_expected_onnxruntime_path(addon_id).is_dir()
+    except Exception:
+        return False
 
 
 def installed_gpu_addons() -> List[Dict[str, Any]]:
@@ -132,16 +149,22 @@ def _gpu_addon_dll_dirs(site_dir: Path) -> List[Path]:
 
 
 def recommended_gpu_addon() -> Optional[Dict[str, Any]]:
+    """Return the default GPU add-on recommendation.
+
+    DirectML is kept as the compact NVIDIA/AMD path. Intel should use
+    OpenVINO because that add-on is small and vendor-optimized.
+    """
     nvidia = detect_nvidia_gpus()
     controllers = detect_windows_video_controllers()
-    vendors = {g.get("vendor") for g in controllers}
-    if nvidia:
-        addon_id = "nvidia-cuda"
+    if platform.system().lower() != "windows" or not (nvidia or controllers):
+        return None
+
+    vendors = [str(controller.get("vendor") or "").lower() for controller in controllers]
+    if nvidia or "nvidia" in vendors:
+        addon_id = "directml"
     elif "intel" in vendors:
         addon_id = "intel-openvino"
     elif "amd" in vendors:
-        addon_id = "directml"
-    elif controllers:
         addon_id = "directml"
     else:
         return None
@@ -149,8 +172,7 @@ def recommended_gpu_addon() -> Optional[Dict[str, Any]]:
     meta = dict(GPU_ADDON_DEFS[addon_id])
     meta["id"] = addon_id
     try:
-        from core.version import get_version_short
-        version = get_version_short()
+        version = _version_short()
     except Exception:
         version = "<version>"
     meta["zip_name"] = f"{meta['artifact']}-{version}.zip"
@@ -159,17 +181,32 @@ def recommended_gpu_addon() -> Optional[Dict[str, Any]]:
     return meta
 
 
+def _configured_addon_ids() -> List[str]:
+    """Return add-ons to load for the requested acceleration mode."""
+    requested = (os.environ.get("ASR_VN_ACCEL") or "").strip().lower()
+    if requested == "cuda":
+        return ["nvidia-cuda"]
+    if requested == "nvidia":
+        return ["directml"]
+    if requested in ("openvino", "intel"):
+        return ["intel-openvino"]
+    if requested in ("directml", "dml", "amd"):
+        return ["directml"]
+
+    recommendation = recommended_gpu_addon()
+    if recommendation:
+        return [recommendation["id"]]
+
+    if os.environ.get("ASR_VN_GPU_ADDON_FALLBACKS") == "1":
+        return list(GPU_ADDON_DEFS)
+    return []
+
+
 @lru_cache(maxsize=1)
 def configure_gpu_addon_paths() -> List[str]:
     """Prepend installed GPU add-on site-packages before importing ORT."""
-    recommendation = recommended_gpu_addon()
-    preferred_ids: List[str] = []
-    if recommendation:
-        preferred_ids.append(recommendation["id"])
-    preferred_ids.extend([aid for aid in GPU_ADDON_DEFS if aid not in preferred_ids])
-
     added: List[str] = []
-    for addon_id in preferred_ids:
+    for addon_id in _configured_addon_ids():
         site_dir = gpu_addon_site_packages(addon_id)
         if not (site_dir / "onnxruntime").is_dir():
             continue
@@ -380,7 +417,11 @@ def preferred_gpu_provider(policy: str = "auto", ort_module=None) -> Optional[st
     available = set(ort_available_providers(ort_module))
     gpu = best_gpu()
 
-    if policy in ("cuda", "nvidia"):
+    if policy in ("cuda",):
+        return CUDA_PROVIDER if CUDA_PROVIDER in available else None
+    if policy in ("nvidia",):
+        if DML_PROVIDER in available:
+            return DML_PROVIDER
         return CUDA_PROVIDER if CUDA_PROVIDER in available else None
     if policy in ("openvino", "intel"):
         return OPENVINO_PROVIDER if OPENVINO_PROVIDER in available else None
@@ -395,20 +436,13 @@ def preferred_gpu_provider(policy: str = "auto", ort_module=None) -> Optional[st
     if policy not in ("auto", "gpu"):
         return None
 
-    if gpu and gpu.get("vendor") == "nvidia" and CUDA_PROVIDER in available:
-        return CUDA_PROVIDER
+    if gpu and gpu.get("vendor") == "nvidia" and DML_PROVIDER in available:
+        return DML_PROVIDER
     if gpu and gpu.get("vendor") == "intel" and OPENVINO_PROVIDER in available:
         return OPENVINO_PROVIDER
-    if gpu and gpu.get("vendor") == "amd":
-        if DML_PROVIDER in available:
-            return DML_PROVIDER
-        if ROCM_PROVIDER in available:
-            return ROCM_PROVIDER
-    if gpu and OPENVINO_PROVIDER in available:
-        return OPENVINO_PROVIDER
-    if gpu and DML_PROVIDER in available:
+    if gpu and gpu.get("vendor") == "amd" and DML_PROVIDER in available:
         return DML_PROVIDER
-    if gpu and ROCM_PROVIDER in available:
+    if gpu and gpu.get("vendor") == "amd" and ROCM_PROVIDER in available:
         return ROCM_PROVIDER
     return None
 
@@ -435,6 +469,89 @@ def is_gpu_provider(provider: Optional[str]) -> bool:
     return provider in {CUDA_PROVIDER, OPENVINO_PROVIDER, DML_PROVIDER, ROCM_PROVIDER}
 
 
+def _ensure_campp_poolpad_model(model_path: str) -> Optional[str]:
+    """Return or build the GPU-compatible CAM++ graph when possible.
+
+    CAM++ has CAM-layer AveragePool(kernel=100, stride=100, ceil_mode=1,
+    count_include_pad=1). ORT CPU divides the last partial window by 100, while
+    CUDA EP divides by the number of real elements. Padding the time axis to the
+    next multiple of 100 before those pools makes GPU output match CPU
+    semantics and also prevents OpenVINO from rejecting short internal tensors.
+
+    This graph is derived from the CPU ONNX file, so the app may generate it
+    lazily during calibration/runtime instead of shipping it in the base bundle.
+    """
+    src = Path(model_path)
+    if not src.exists():
+        return None
+    dst = src.with_name(src.stem + ".gpu.onnx")
+    if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
+        return str(dst)
+    try:
+        import numpy as np  # type: ignore
+        import onnx  # type: ignore
+        from onnx import helper, numpy_helper  # type: ignore
+
+        model = onnx.load(str(src))
+        existing = {init.name for init in model.graph.initializer}
+
+        def _add_init(name: str, arr: Any) -> None:
+            if name not in existing:
+                model.graph.initializer.append(numpy_helper.from_array(np.asarray(arr), name))
+                existing.add(name)
+
+        _add_init("__campp_pool_axis2", np.array(2, dtype=np.int64))
+        _add_init("__campp_pool_kernel100", np.array(100, dtype=np.int64))
+        _add_init("__campp_pool_unsq_axes0", np.array([0], dtype=np.int64))
+        _add_init("__campp_pool_pads_prefix5", np.array([0, 0, 0, 0, 0], dtype=np.int64))
+
+        new_nodes = []
+        patched = 0
+        for node in model.graph.node:
+            is_pool = node.op_type == "AveragePool" and any(
+                attr.name == "kernel_shape" and list(attr.ints) == [100]
+                for attr in node.attribute
+            )
+            if is_pool:
+                base = (node.name or f"avgpool_{patched}").replace("/", "_").replace(":", "_")
+                x = node.input[0]
+                shape = f"{base}_shape"
+                tdim = f"{base}_tdim"
+                mod = f"{base}_mod"
+                need = f"{base}_need"
+                pad = f"{base}_pad"
+                pad1 = f"{base}_pad1"
+                pads = f"{base}_pads"
+                padded = f"{base}_padded"
+                new_nodes.extend([
+                    helper.make_node("Shape", [x], [shape], name=f"{base}_Shape"),
+                    helper.make_node("Gather", [shape, "__campp_pool_axis2"], [tdim], name=f"{base}_GatherTime", axis=0),
+                    helper.make_node("Mod", [tdim, "__campp_pool_kernel100"], [mod], name=f"{base}_Mod100", fmod=0),
+                    helper.make_node("Sub", ["__campp_pool_kernel100", mod], [need], name=f"{base}_NeedPad"),
+                    helper.make_node("Mod", [need, "__campp_pool_kernel100"], [pad], name=f"{base}_PadToMultiple100", fmod=0),
+                    helper.make_node("Unsqueeze", [pad, "__campp_pool_unsq_axes0"], [pad1], name=f"{base}_UnsqueezePad"),
+                    helper.make_node("Concat", ["__campp_pool_pads_prefix5", pad1], [pads], name=f"{base}_Pads", axis=0),
+                    helper.make_node("Pad", [x, pads], [padded], name=f"{base}_PadPoolInput", mode="constant"),
+                ])
+                node.input[0] = padded
+                patched += 1
+            new_nodes.append(node)
+        if patched <= 0:
+            return None
+        del model.graph.node[:]
+        model.graph.node.extend(new_nodes)
+        onnx.checker.check_model(model)
+        onnx.save(model, str(dst))
+        return str(dst)
+    except Exception:
+        return str(dst) if dst.exists() else None
+
+
+def _ensure_openvino_campp_model(model_path: str) -> Optional[str]:
+    """Backward-compatible name used by build scripts."""
+    return _ensure_campp_poolpad_model(model_path)
+
+
 def create_ort_session(
     ort_module: Any,
     model_path: str,
@@ -446,7 +563,26 @@ def create_ort_session(
     requested = ort_provider_request(policy, ort_module)
     tried: List[Dict[str, Any]] = []
 
+    stage_lower = str(stage or "").lower()
+    model_lower = str(model_path or "").lower()
+    campp_patch: Optional[str] = None
+    if requested and requested[0] != CPU_PROVIDER and (
+        "cam++" in stage_lower or "campp" in stage_lower or "campplus" in model_lower
+    ):
+        campp_patch = _ensure_campp_poolpad_model(model_path)
+        if campp_patch:
+            model_path = campp_patch
+
     def _create(providers: List[str]):
+        if providers and providers[0] == DML_PROVIDER:
+            try:
+                sess_options.enable_mem_pattern = False
+            except Exception:
+                pass
+            try:
+                sess_options.execution_mode = ort_module.ExecutionMode.ORT_SEQUENTIAL
+            except Exception:
+                pass
         return ort_module.InferenceSession(model_path, sess_options, providers=providers)
 
     if requested != [CPU_PROVIDER]:
@@ -464,6 +600,9 @@ def create_ort_session(
                 "used_gpu": is_gpu_provider(actual),
                 "fallback_reason": None,
             }
+            if campp_patch:
+                info["model_path"] = campp_patch
+                info["model_patch"] = "campp_avgpool_pad_to_multiple_100"
             if is_gpu_provider(requested[0]) and not is_gpu_provider(actual):
                 info["fallback_reason"] = f"requested {requested[0]} but ORT created {actual}"
             return session, info

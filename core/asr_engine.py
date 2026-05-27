@@ -1930,6 +1930,16 @@ class TranscriberPipeline:
     def _is_cancelled(self):
         return self.cancel_check()
 
+    def _effective_save_ram(self):
+        if not self.config.get("save_ram", False):
+            return False
+        provider = (
+            self.config.get("execution_provider")
+            or os.environ.get("ASR_VN_ACCEL")
+            or "cpu"
+        )
+        return str(provider or "cpu").lower() in ("cpu", "none", "off")
+
     def run(self):
         """
         Chạy toàn bộ pipeline ASR.
@@ -1944,7 +1954,7 @@ class TranscriberPipeline:
             return self._run_pipeline()
         finally:
             self._cleanup_phase_file()  # Xóa khi xong hoặc crash
-            if self.config.get("save_ram", False):
+            if self._effective_save_ram():
                 try:
                     clear_model_cache("all")
                     unload_vad_model()
@@ -1972,6 +1982,33 @@ class TranscriberPipeline:
             or os.environ.get("ASR_VN_ACCEL")
             or "cpu"
         )
+        stage_execution_providers = self.config.get("stage_execution_providers") or {}
+        if isinstance(stage_execution_providers, str):
+            try:
+                import json
+                stage_execution_providers = json.loads(stage_execution_providers)
+            except Exception:
+                stage_execution_providers = {}
+        if str(execution_provider or "cpu").lower() in ("cpu", "none", "off"):
+            stage_execution_providers = {}
+
+        def _stage_provider(stage_key, default=None):
+            value = ""
+            if isinstance(stage_execution_providers, dict):
+                value = stage_execution_providers.get(stage_key) or ""
+            return value or default or execution_provider
+
+        def _diarization_provider_for_model(speaker_model_id):
+            fallback = _stage_provider("diarization", execution_provider)
+            if speaker_model_id in ("senko_campp", "senko_campp_optimized"):
+                return _stage_provider("diarization_campp", fallback)
+            return _stage_provider("diarization_pyannote", fallback)
+
+        asr_execution_provider = _stage_provider("asr", execution_provider)
+        diarization_execution_provider = _stage_provider("diarization", execution_provider)
+        dnsmos_execution_provider = _stage_provider("dnsmos", execution_provider)
+        punctuation_execution_provider = _stage_provider("punctuation", execution_provider)
+        effective_save_ram = self._effective_save_ram()
         restore_punctuation = self.config.get("restore_punctuation", False)
 
         # Detect ROVER mode
@@ -2002,10 +2039,10 @@ class TranscriberPipeline:
             secondary_path = os.path.join(models_dir, ROVER_MODEL_IDS[1])
 
             recognizer = create_recognizer(primary_path, cpu_threads, max_active_paths=8,
-                                           execution_provider=execution_provider)
+                                           execution_provider=asr_execution_provider)
             self._emit("PHASE:Init|Đang khởi tạo mô hình phụ (ROVER)|40")
             rover_recognizer = create_recognizer(secondary_path, cpu_threads, max_active_paths=8,
-                                                 execution_provider=execution_provider)
+                                                 execution_provider=asr_execution_provider)
             self._emit("PHASE:Init|Đã khởi tạo 2 mô hình (ROVER)|60")
             print(f"[ROVER] Loaded 2 models: {ROVER_MODEL_IDS[0]} + {ROVER_MODEL_IDS[1]}")
         else:
@@ -2018,7 +2055,7 @@ class TranscriberPipeline:
 
             self._emit("PHASE:Init|Đang khởi tạo mô hình|30")
             recognizer = create_recognizer(self.model_path, cpu_threads,
-                                           execution_provider=execution_provider)
+                                           execution_provider=asr_execution_provider)
             # Clear decoder cache từ file trước (tránh tích lũy unbounded trong server mode)
             recognizer['dec_cache'].clear()
             self._emit("PHASE:Init|Đang khởi tạo mô hình|60")
@@ -2126,7 +2163,7 @@ class TranscriberPipeline:
             print(f"[Chunk] {len(chunk_plan)} chunks trên concat audio")
 
             # Giải phóng VAD model trước khi transcribe
-            if self.config.get("save_ram", False):
+            if effective_save_ram:
                 unload_vad_model()
                 import gc
                 gc.collect()
@@ -2254,18 +2291,18 @@ class TranscriberPipeline:
             if worker_threads != cpu_threads:
                 recognizer = create_recognizer(_primary_path, worker_threads,
                                                max_active_paths=8 if is_rover else 8,
-                                               execution_provider=execution_provider)
+                                               execution_provider=asr_execution_provider)
                 recognizer['dec_cache'].clear()
                 if is_rover and rover_recognizer is not None:
                     rover_recognizer = create_recognizer(
                         _secondary_path, worker_threads, max_active_paths=8,
-                        execution_provider=execution_provider)
+                        execution_provider=asr_execution_provider)
                     rover_recognizer['dec_cache'].clear()
 
             # Create 2nd worker's recognizer(s) with separate decoder caches
             recognizer_2 = create_recognizer(_primary_path, worker_threads,
                                               max_active_paths=8 if is_rover else 8,
-                                              execution_provider=execution_provider)
+                                              execution_provider=asr_execution_provider)
             recognizer_2 = dict(recognizer_2)
             recognizer_2['dec_cache'] = {}
 
@@ -2273,7 +2310,7 @@ class TranscriberPipeline:
             if is_rover and rover_recognizer is not None:
                 rover_recognizer_2 = create_recognizer(
                     _secondary_path, worker_threads, max_active_paths=8,
-                    execution_provider=execution_provider)
+                    execution_provider=asr_execution_provider)
                 rover_recognizer_2 = dict(rover_recognizer_2)
                 rover_recognizer_2['dec_cache'] = {}
 
@@ -2463,7 +2500,7 @@ class TranscriberPipeline:
         quality_start = time.time()
         try:
             from core.audio_analyzer import AudioQualityAnalyzer
-            _dnsmos_analyzer = AudioQualityAnalyzer(use_gpu=str(execution_provider).lower() not in ("cpu", "none", "off"))
+            _dnsmos_analyzer = AudioQualityAnalyzer(use_gpu=str(dnsmos_execution_provider).lower() not in ("cpu", "none", "off"))
             DNSMOS_LEN = 144160  # 9.01s @ 16kHz — đúng input size DNSMOS model
             concat_len = len(concat_audio)
             all_dnsmos = []
@@ -2547,7 +2584,7 @@ class TranscriberPipeline:
 
         # Giải phóng ASR recognizer nếu tiết kiệm RAM
         # (recognizer không còn cần sau transcription)
-        if self.config.get("save_ram", False):
+        if effective_save_ram:
             clear_model_cache("recognizer")
 
         restore_duration = 0.0
@@ -2580,6 +2617,7 @@ class TranscriberPipeline:
 
                     num_speakers = self.config.get("num_speakers", 2)
                     speaker_model_id = self.config.get("speaker_model", "titanet_small")
+                    diarization_execution_provider = _diarization_provider_for_model(speaker_model_id)
                     hf_token = self.config.get("hf_token") or os.environ.get('HF_TOKEN', None)
 
                     self._emit("PHASE:Diarization|Đang tải model phân tách|5")
@@ -2591,7 +2629,7 @@ class TranscriberPipeline:
                             diarizer_3d = SenkoCamppDiarizerOptimized(
                                 num_speakers=num_speakers,
                                 num_threads=self.config.get("cpu_threads", 4),
-                                execution_provider=execution_provider)
+                                execution_provider=diarization_execution_provider)
                         else:
                             from core.speaker_diarization_senko_campp import SenkoCamppDiarizer
                             diarizer_3d = SenkoCamppDiarizer(
@@ -2642,7 +2680,7 @@ class TranscriberPipeline:
                             num_threads=self.config.get("cpu_threads", 4),
                             threshold=self.config.get("diarization_threshold", 0.6),
                             auth_token=hf_token,
-                            execution_provider=execution_provider,
+                            execution_provider=diarization_execution_provider,
                         )
 
                         if self._is_cancelled():
@@ -2802,7 +2840,7 @@ class TranscriberPipeline:
                             logger.error(traceback.format_exc())
                             self._overlap_segments = []
 
-                    if self.config.get("save_ram", False):
+                    if effective_save_ram:
                         clear_model_cache("diarizer")
 
                 except InterruptedError:
@@ -2873,8 +2911,8 @@ class TranscriberPipeline:
                 if not bypass and full_text.strip():
                     restorer = _get_cached_restorer(
                         "cpu", punct_confidence, case_confidence,
-                        prefer_int8=self.config.get("save_ram", False),
-                        execution_provider=execution_provider,
+                        prefer_int8=effective_save_ram,
+                        execution_provider=punctuation_execution_provider,
                     )
 
                     # GecBERT runs 3 iterations, each calls progress 0-100
@@ -3060,8 +3098,8 @@ class TranscriberPipeline:
                     logger.info(f"[DEBUG] Getting PunctuationRestorer (confidence={punct_confidence:.3f})")
                     restorer = _get_cached_restorer(
                         "cpu", punct_confidence, case_confidence,
-                        prefer_int8=self.config.get("save_ram", False),
-                        execution_provider=execution_provider,
+                        prefer_int8=effective_save_ram,
+                        execution_provider=punctuation_execution_provider,
                     )
                     logger.info("[DEBUG] PunctuationRestorer ready")
 
@@ -3108,7 +3146,7 @@ class TranscriberPipeline:
                     logger.info(f"[DEBUG] Punctuation result: has_punctuation={has_punct}, changed={full_text != restored_text_raw}")
                     full_text = restored_text_raw
 
-                    if self.config.get("save_ram", False):
+                    if effective_save_ram:
                         clear_model_cache("restorer")
                     logger.info("[DEBUG] Punctuation restore complete")
 
@@ -3406,6 +3444,7 @@ class TranscriberPipeline:
             "asr_confidence": asr_confidence,
             "quality_info": _dnsmos_result,
             "execution_provider": execution_provider,
+            "stage_execution_providers": stage_execution_providers,
             "asr_provider_info": asr_provider_info,
             # Overlap separation results (parallel segments for vùng 2-speaker overlap).
             # Empty list nếu feature không bật hoặc không có overlap. Additive —

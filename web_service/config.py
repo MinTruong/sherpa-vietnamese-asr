@@ -37,6 +37,7 @@ class ServerConfig:
         "default_case_confidence": "6",
         "default_diarization_threshold": "70",
         "execution_provider": "cpu",
+        "stage_execution_providers": "{}",
         "jwt_expire_minutes": "480",  # P2: 8h thay vì 24h — giảm cửa sổ tấn công nếu token bị lộ
         "http_mode": "0",
         "admin_password_hash": "",

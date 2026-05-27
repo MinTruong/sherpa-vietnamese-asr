@@ -225,7 +225,8 @@ const MANIFEST_STORAGE_KEY = "asr-vn-offline-model-manifest-v1";
 const OFFLINE_PWA_CODE_VERSION = "offline-pwa-v140";
 window.__OFFLINE_PWA_CODE_VERSION = OFFLINE_PWA_CODE_VERSION;
 const OFFLINE_RUNTIME_CACHE_NAME = OFFLINE_PWA_CODE_VERSION;
-const CALIBRATION_CODE_VERSION = "calibration-v1-provider-stage-tolerance";
+const CALIBRATION_CODE_VERSION = "calibration-v2-provider-stage-tolerance-20pct";
+const WEBGPU_ACCEPT_SPEEDUP_MIN = 1.20;
 const CALIBRATION_SAMPLE_URL = "/calibration/1hour_qh_10min.mp3";
 const CALIBRATION_SAMPLE_NAME = "1hour_qh_10min.mp3";
 const STARTUP_FETCH_TIMEOUT_MS = 1500;
@@ -6320,7 +6321,7 @@ async function addAsrBenchmarkWebGpuBranch(options, asr, asrAudio, vadSegments, 
     webgpuAttempt &&
     webgpuAttempt.provider === "webgpu" &&
     outputHashEqual === true &&
-    speedupWebgpuOverWasm > 1
+    speedupWebgpuOverWasm >= WEBGPU_ACCEPT_SPEEDUP_MIN
   );
   const mismatchDetails = outputHashEqual === false
     ? benchmarkMismatchDetails(
@@ -6335,7 +6336,7 @@ async function addAsrBenchmarkWebGpuBranch(options, asr, asrAudio, vadSegments, 
   if (webgpuAttempt && !webgpuAccepted) {
     if (webgpuAttempt.provider !== "webgpu") rejectionReason = `webgpu attempt ran on ${webgpuAttempt.provider}`;
     else if (outputHashEqual !== true) rejectionReason = "webgpu output hash did not match wasm";
-    else if (!(speedupWebgpuOverWasm > 1)) rejectionReason = "webgpu was not faster than wasm";
+    else if (!(speedupWebgpuOverWasm >= WEBGPU_ACCEPT_SPEEDUP_MIN)) rejectionReason = "webgpu was not at least 20% faster than wasm";
   } else if (!webgpuAttempt) {
     const webgpuError = attempts.find((attempt) => attempt.runtime === "webgpu" && attempt.error);
     if (webgpuError) rejectionReason = webgpuError.error?.message || "webgpu attempt failed";
@@ -9848,7 +9849,7 @@ async function runBenchmarkDualProviderStage(options, name, run, unload, summari
     webgpu &&
     webgpu.provider === "webgpu" &&
     outputHashEqual === true &&
-    speedupWebgpuOverWasm > 1
+    speedupWebgpuOverWasm >= WEBGPU_ACCEPT_SPEEDUP_MIN
   );
   const mismatchDetails = outputHashEqual === false
     ? benchmarkMismatchDetails(
@@ -9863,7 +9864,7 @@ async function runBenchmarkDualProviderStage(options, name, run, unload, summari
   if (webgpu && !webgpuAccepted) {
     if (webgpu.provider !== "webgpu") rejectionReason = `webgpu attempt ran on ${webgpu.provider}`;
     else if (outputHashEqual !== true) rejectionReason = "webgpu output hash did not match wasm";
-    else if (!(speedupWebgpuOverWasm > 1)) rejectionReason = "webgpu was not faster than wasm";
+    else if (!(speedupWebgpuOverWasm >= WEBGPU_ACCEPT_SPEEDUP_MIN)) rejectionReason = "webgpu was not at least 20% faster than wasm";
   } else if (!webgpu) {
     const webgpuError = attempts.find((attempt) => attempt.runtime === "webgpu" && attempt.error);
     if (webgpuError) rejectionReason = webgpuError.error?.message || "webgpu attempt failed";
@@ -10023,7 +10024,7 @@ function summarizeDiarSegmentsForBenchmark(result) {
 
 function summarizeBenchmarkStageComparisons(stages = []) {
   const dual = stages.filter((stage) => stage.capability === "wasm-webgpu");
-  const isWebGpuFaster = (stage) => Number(stage.comparison?.speedupWebgpuOverWasm || 0) > 1;
+  const isWebGpuFaster = (stage) => Number(stage.comparison?.speedupWebgpuOverWasm || 0) >= WEBGPU_ACCEPT_SPEEDUP_MIN;
   const isToleranceAccepted = (stage) => (
     stage.comparison?.webgpuAcceptedByTolerance === true ||
     stage.comparison?.downstreamSegmentDiffWithinTolerance === true && stage.comparison?.webgpuAccepted === true
@@ -13992,7 +13993,7 @@ async function maybeAcceptPyannoteEmbeddingWebGpu(options, referenceResult, bina
       webgpuEntry.attempt?.provider === "webgpu" &&
       numericToleranceAccepted &&
       downstreamSegmentDiffWithinTolerance &&
-      speedup > 1
+      speedup >= WEBGPU_ACCEPT_SPEEDUP_MIN
     );
     const downstreamCheck = {
       elapsedSeconds: benchmarkSeconds(downstreamStarted),
@@ -14071,7 +14072,7 @@ async function runPyannoteClusteringBenchmark(options, embeddings, binarized, co
       maxTimeDiff: 0.05,
     });
     const speedup = Number((jsAttempt.elapsedSeconds / Math.max(webgpuAttempt.elapsedSeconds, 1e-9)).toFixed(3));
-    const webgpuAccepted = Boolean(segmentDiffOk && speedup > 1);
+    const webgpuAccepted = Boolean(segmentDiffOk && speedup >= WEBGPU_ACCEPT_SPEEDUP_MIN);
     comparison = {
       speedupWebgpuOverWasm: speedup,
       outputHashEqual,
@@ -14080,7 +14081,7 @@ async function runPyannoteClusteringBenchmark(options, embeddings, binarized, co
       segmentDiff: outputHashEqual ? null : segmentDiff,
       rejectionReason: webgpuAccepted
         ? null
-        : (!segmentDiffOk ? "webgpu segment output differs beyond tolerance" : "webgpu was not faster than js clustering"),
+        : (!segmentDiffOk ? "webgpu segment output differs beyond tolerance" : "webgpu was not at least 20% faster than js clustering"),
     };
     if (webgpuAccepted) {
       selectedResult = webgpuResult;
@@ -15619,11 +15620,11 @@ async function addCamppLongFormClusteringBenchmark(options, embedding) {
   const speedupWebgpuOverWasm = wasmAttempt?.elapsedSeconds && webgpuAttempt?.elapsedSeconds
     ? Number((wasmAttempt.elapsedSeconds / webgpuAttempt.elapsedSeconds).toFixed(3))
     : null;
-  const webgpuAccepted = Boolean(webgpuAttempt && outputHashEqual === true && speedupWebgpuOverWasm > 1);
+  const webgpuAccepted = Boolean(webgpuAttempt && outputHashEqual === true && speedupWebgpuOverWasm >= WEBGPU_ACCEPT_SPEEDUP_MIN);
   let rejectionReason = null;
   if (webgpuAttempt && !webgpuAccepted) {
     if (outputHashEqual !== true) rejectionReason = "webgpu output hash did not match js long-form clustering";
-    else if (!(speedupWebgpuOverWasm > 1)) rejectionReason = "webgpu was not faster than js long-form clustering";
+    else if (!(speedupWebgpuOverWasm >= WEBGPU_ACCEPT_SPEEDUP_MIN)) rejectionReason = "webgpu was not at least 20% faster than js long-form clustering";
   } else if (!webgpuAttempt) {
     const webgpuError = attempts.find((attempt) => attempt.runtime === "webgpu" && attempt.error);
     if (webgpuError) rejectionReason = webgpuError.error?.message || "webgpu attempt failed";
@@ -15960,11 +15961,11 @@ async function runCamppDiarization(samples, options = {}) {
     const speedupWebgpuOverWasm = webgpuAttempt?.elapsedSeconds
       ? Number((attempts[0].elapsedSeconds / webgpuAttempt.elapsedSeconds).toFixed(3))
       : null;
-    const webgpuAccepted = Boolean(webgpuAttempt && outputHashEqual === true && speedupWebgpuOverWasm > 1);
+    const webgpuAccepted = Boolean(webgpuAttempt && outputHashEqual === true && speedupWebgpuOverWasm >= WEBGPU_ACCEPT_SPEEDUP_MIN);
     let rejectionReason = null;
     if (webgpuAttempt && !webgpuAccepted) {
       if (outputHashEqual !== true) rejectionReason = "webgpu output hash did not match js";
-      else if (!(speedupWebgpuOverWasm > 1)) rejectionReason = "webgpu was not faster than js";
+      else if (!(speedupWebgpuOverWasm >= WEBGPU_ACCEPT_SPEEDUP_MIN)) rejectionReason = "webgpu was not at least 20% faster than js";
     }
     const mismatchDetails = outputHashEqual === false
       ? benchmarkMismatchDetails(
@@ -16024,7 +16025,7 @@ async function runCamppDiarization(samples, options = {}) {
           webgpuAttemptForEmbedding?.provider === "webgpu" &&
           numericToleranceAccepted &&
           downstreamSegmentHashEqual &&
-          speedup > 1
+          speedup >= WEBGPU_ACCEPT_SPEEDUP_MIN
         );
         downstreamCheck = {
           elapsedSeconds: benchmarkSeconds(downstreamStarted),
