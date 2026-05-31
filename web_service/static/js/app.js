@@ -1641,8 +1641,8 @@ async function doChangePassword() {
         return;
     }
 
-    if (newPw.length < 6) {
-        errorEl.textContent = 'Mật khẩu mới phải có ít nhất 6 ký tự';
+    if (newPw.length < 8) {
+        errorEl.textContent = 'Mật khẩu mới phải có ít nhất 8 ký tự';
         errorEl.style.display = 'block';
         return;
     }

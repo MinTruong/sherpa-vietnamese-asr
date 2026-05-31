@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit, QTableWidget, QTableWidgetItem, QComboBox, QSpinBox,
     QGroupBox, QFormLayout, QCheckBox, QMessageBox, QHeaderView,
     QDialog, QDialogButtonBox, QProgressBar, QDoubleSpinBox, QFileDialog,
+    QScrollArea,
 )
 from PyQt6.QtCore import QSize, QTimer, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QTextCursor
@@ -37,6 +38,8 @@ class _LocalAPI:
     def __init__(self, port=8443):
         self._port = port
         self._host = "127.0.0.1"
+        self._configured_host = "127.0.0.1"
+        self._http_mode_override = None
 
     @property
     def port(self):
@@ -48,35 +51,116 @@ class _LocalAPI:
 
     @property
     def host(self):
-        return self._host
+        return self._configured_host
 
     @host.setter
     def host(self, value):
-        # Admin GUI luôn chạy cùng máy với server (quản lý subprocess) → ép về loopback.
-        # Config host (0.0.0.0, IP LAN, ...) là địa chỉ server LISTEN, không phải địa chỉ GUI CONNECT.
-        # Dùng 127.0.0.1 để tránh SSL verify fail với self-signed cert và loại bỏ MITM risk trên LAN.
-        self._host = "127.0.0.1"
+        # Keep the configured bind host. If the server is bound to a concrete
+        # LAN/VPN IP, loopback may legitimately refuse the connection.
+        host = str(value or "").strip() or "127.0.0.1"
+        self._configured_host = host
+        self._host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
+
+    @property
+    def http_mode(self):
+        if self._http_mode_override is not None:
+            return self._http_mode_override
+        try:
+            from web_service.config import server_config
+            return bool(server_config.http_mode)
+        except Exception:
+            return False
+
+    @http_mode.setter
+    def http_mode(self, value):
+        self._http_mode_override = bool(value)
+
+    def refresh_from_config(self):
+        try:
+            from web_service.config import server_config
+            self.port = server_config.port
+            self.host = server_config.get("host")
+            self._http_mode_override = None
+        except Exception:
+            pass
+
+    def _candidate_hosts(self):
+        configured = self._configured_host or "127.0.0.1"
+        loopback_hosts = {"127.0.0.1", "::1", "localhost"}
+        candidates = []
+        if configured in ("0.0.0.0", "::", "[::]", ""):
+            candidates.extend(["127.0.0.1", "localhost"])
+        else:
+            candidates.append(configured)
+            if configured not in loopback_hosts:
+                candidates.extend(["127.0.0.1", "localhost"])
+
+        seen = set()
+        unique = []
+        for host in candidates:
+            if host not in seen:
+                seen.add(host)
+                unique.append(host)
+        return unique
+
+    def _scheme(self):
+        return "http" if self.http_mode else "https"
+
+    def _url_host(self, host):
+        if ":" in host and not (host.startswith("[") and host.endswith("]")):
+            return f"[{host}]"
+        return host
 
     def _ssl_ctx(self):
         import ssl
         ctx = ssl.create_default_context()
-        # A02: Chỉ disable cert verification cho loopback (self-signed cert).
-        # Với remote host, giữ verification để tránh MITM.
-        _loopback = {"127.0.0.1", "::1", "localhost"}
-        if self._host in _loopback:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+        # Admin GUI talks to the same server process through a local-only API.
+        # The bundled self-signed cert is often localhost-only while the server
+        # may bind to a LAN/VPN IP, so verification would break valid local use.
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         return ctx
+
+    def _format_http_error(self, err):
+        try:
+            raw = err.read().decode("utf-8", errors="replace")
+        except Exception:
+            raw = ""
+        detail = raw.strip()
+        if detail:
+            try:
+                parsed = json.loads(detail)
+                detail = parsed.get("detail", parsed)
+            except Exception:
+                pass
+        return f"HTTP {err.code}: {detail or err.reason}"
 
     def request(self, method, path, body=None):
         """Gọi API localhost, trả về dict/list hoặc raise Exception."""
+        import urllib.error
         import urllib.request
-        url = f"https://{self._host}:{self._port}{path}"
         headers = {"Content-Type": "application/json"}
-        data = json.dumps(body).encode() if body else None
-        req = urllib.request.Request(url, data=data, method=method, headers=headers)
-        resp = urllib.request.urlopen(req, timeout=10, context=self._ssl_ctx())
-        return json.loads(resp.read())
+        data = json.dumps(body).encode() if body is not None else None
+        scheme = self._scheme()
+        errors = []
+
+        for host in self._candidate_hosts():
+            url = f"{scheme}://{self._url_host(host)}:{self._port}{path}"
+            try:
+                req = urllib.request.Request(url, data=data, method=method, headers=headers)
+                resp = urllib.request.urlopen(req, timeout=10, context=self._ssl_ctx())
+                raw = resp.read()
+                return json.loads(raw) if raw else {}
+            except urllib.error.HTTPError as e:
+                raise RuntimeError(self._format_http_error(e)) from e
+            except Exception as e:
+                errors.append(f"{url} -> {e}")
+
+        tried = "; ".join(errors)
+        raise RuntimeError(
+            f"Không kết nối được admin API trên port {self._port}. "
+            f"Kiểm tra server đã chạy và host/port đúng. Đã thử: {tried}"
+        )
 
     def get(self, path):
         return self.request("GET", path)
@@ -189,20 +273,8 @@ class CollapsibleSection(QWidget):
         arrow = "▾" if not self._collapsed else "▸"
         self._btn.setText(f"  {arrow}   {self._title}")
         self._content.setVisible(not self._collapsed)
-        # Resize main window height to fit content
-        def _resize():
-            QApplication.processEvents()
-            main_win = self.window()
-            if not isinstance(main_win, QMainWindow):
-                return
-            current_w = main_win.width()
-            central = main_win.centralWidget()
-            if central and central.layout():
-                needed_h = central.layout().minimumSize().height()
-                frame_extra = main_win.frameGeometry().height() - main_win.height()
-                new_h = min(needed_h + frame_extra + 8, 900)
-                main_win.resize(current_w, new_h)
-        QTimer.singleShot(10, _resize)
+        self._content.updateGeometry()
+        self.updateGeometry()
 
 
 class BaseTab(QWidget):
@@ -798,7 +870,7 @@ class UsersTab(BaseTab):
 
         edit_pass = QLineEdit()
         edit_pass.setEchoMode(QLineEdit.EchoMode.Password)
-        edit_pass.setPlaceholderText("Tối thiểu 6 ký tự")
+        edit_pass.setPlaceholderText("Tối thiểu 8 ký tự")
         form.addRow("Mật khẩu:", edit_pass)
 
         spin_storage = QDoubleSpinBox()
@@ -819,8 +891,8 @@ class UsersTab(BaseTab):
             if len(username) < 2:
                 QMessageBox.warning(self, "Lỗi", "Tên đăng nhập phải có ít nhất 2 ký tự.")
                 return
-            if len(password) < 6:
-                QMessageBox.warning(self, "Lỗi", "Mật khẩu phải có ít nhất 6 ký tự.")
+            if len(password) < 8:
+                QMessageBox.warning(self, "Lỗi", "Mật khẩu phải có ít nhất 8 ký tự.")
                 return
             try:
                 api = self.main_window.local_api
@@ -859,7 +931,7 @@ class UsersTab(BaseTab):
 
         edit_pass = QLineEdit()
         edit_pass.setEchoMode(QLineEdit.EchoMode.Password)
-        edit_pass.setPlaceholderText("Tối thiểu 6 ký tự")
+        edit_pass.setPlaceholderText("Tối thiểu 8 ký tự")
         form.addRow("Mật khẩu mới:", edit_pass)
 
         edit_confirm = QLineEdit()
@@ -876,8 +948,8 @@ class UsersTab(BaseTab):
             if pw != edit_confirm.text():
                 QMessageBox.warning(self, "Lỗi", "Mật khẩu xác nhận không khớp.")
                 return
-            if len(pw) < 6:
-                QMessageBox.warning(self, "Lỗi", "Mật khẩu phải có ít nhất 6 ký tự.")
+            if len(pw) < 8:
+                QMessageBox.warning(self, "Lỗi", "Mật khẩu phải có ít nhất 8 ký tự.")
                 return
             try:
                 api = self.main_window.local_api
@@ -993,7 +1065,19 @@ class ConfigTab(BaseTab):
     """Tab 1: Config & Status (gộp)"""
 
     def init_ui(self):
-        layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        outer_layout.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+
+        layout = QVBoxLayout(content)
         layout.setSpacing(4)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -1345,8 +1429,7 @@ class ConfigTab(BaseTab):
             self.chk_http_mode.setChecked(server_config.http_mode)
 
             # Cập nhật local_api port + host
-            self.main_window.local_api.port = server_config.port
-            self.main_window.local_api.host = server_config.get("host")
+            self.main_window.local_api.refresh_from_config()
         except Exception as e:
             logger.error(f"Failed to load config: {e}")
 
@@ -1582,7 +1665,7 @@ class ConfigTab(BaseTab):
 
         edit_new = QLineEdit()
         edit_new.setEchoMode(QLineEdit.EchoMode.Password)
-        edit_new.setPlaceholderText("Tối thiểu 6 ký tự")
+        edit_new.setPlaceholderText("Tối thiểu 8 ký tự")
         form.addRow("Mật khẩu mới:", edit_new)
 
         edit_confirm = QLineEdit()
@@ -1599,8 +1682,8 @@ class ConfigTab(BaseTab):
             if pw != edit_confirm.text():
                 QMessageBox.warning(self, "Lỗi", "Mật khẩu xác nhận không khớp.")
                 return
-            if len(pw) < 6:
-                QMessageBox.warning(self, "Lỗi", "Mật khẩu phải có ít nhất 6 ký tự.")
+            if len(pw) < 8:
+                QMessageBox.warning(self, "Lỗi", "Mật khẩu phải có ít nhất 8 ký tự.")
                 return
             try:
                 api = self.main_window.local_api
@@ -2013,6 +2096,7 @@ class ConfigTab(BaseTab):
             server_config._config.set("OfflinePWA", "port", str(offline_pwa_port))
 
             server_config.save()
+            self.main_window.local_api.refresh_from_config()
 
             # Kiểm tra cert có cover host mới không (bỏ qua nếu HTTP mode)
             if not self.chk_http_mode.isChecked() and not self._check_cert_covers_host(new_host):
@@ -2411,12 +2495,7 @@ class ServerGUI(QMainWindow):
         self.server = ServerProcess()
         self.local_api = _LocalAPI(port=8443)
         # host + port sẽ được cập nhật từ config trong ConfigTab._load_config()
-        try:
-            from web_service.config import server_config
-            self.local_api.port = server_config.port
-            self.local_api.host = server_config.get("host")
-        except Exception:
-            pass
+        self.local_api.refresh_from_config()
         self.init_ui()
         self.init_timers()
         self._resize_for_primary_screen()
@@ -2425,9 +2504,27 @@ class ServerGUI(QMainWindow):
         """Chặn scroll wheel trên SpinBox/ComboBox."""
         if event.type() == event.Type.Wheel:
             if isinstance(obj, (QSpinBox, QDoubleSpinBox, QComboBox)):
-                event.ignore()
+                if self._scroll_parent_for_wheel(obj, event):
+                    return True
                 return True
         return super().eventFilter(obj, event)
+
+    def _scroll_parent_for_wheel(self, obj, event):
+        parent = obj.parent()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                bar = parent.verticalScrollBar()
+                delta = event.pixelDelta().y()
+                if not delta:
+                    angle = event.angleDelta().y()
+                    delta = int((angle / 120) * max(bar.singleStep(), 20) * 3)
+                if delta:
+                    bar.setValue(bar.value() - delta)
+                    event.accept()
+                    return True
+                return False
+            parent = parent.parent()
+        return False
 
     def init_ui(self):
         central = QWidget()

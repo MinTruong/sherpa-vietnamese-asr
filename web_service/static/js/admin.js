@@ -310,7 +310,7 @@ async function adminDoCreateUser() {
     const errEl = document.getElementById('adm-create-err');
     errEl.textContent = '';
     if (!username || username.length < 2) { errEl.textContent = 'Ten dang nhap it nhat 2 ky tu'; return; }
-    if (password.length < 6) { errEl.textContent = 'Mat khau it nhat 6 ky tu'; return; }
+    if (password.length < 8) { errEl.textContent = 'Mat khau it nhat 8 ky tu'; return; }
     try {
         await apiFetch('/api/admin/users', {
             method: 'POST',
@@ -325,9 +325,9 @@ async function adminDoCreateUser() {
 }
 
 async function adminResetPassword(uid, username) {
-    const pw = prompt('Mat khau moi cho "' + username + '" (it nhat 6 ky tu):');
+    const pw = prompt('Mat khau moi cho "' + username + '" (it nhat 8 ky tu):');
     if (pw === null) return;
-    if (pw.length < 6) { alert('Mat khau it nhat 6 ky tu'); return; }
+    if (pw.length < 8) { alert('Mat khau it nhat 8 ky tu'); return; }
     try {
         await apiFetch('/api/admin/users/' + uid + '/reset-password', {
             method: 'POST', body: JSON.stringify({ password: pw }),
