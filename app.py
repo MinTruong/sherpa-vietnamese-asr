@@ -93,7 +93,7 @@ if "QT_MEDIA_BACKEND" not in os.environ:
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QTabWidget, QLabel, QPushButton, QMessageBox)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSize, QTimer, Qt
 from PyQt6.QtGui import QKeyEvent
 
 from core.config import BASE_DIR, CONFIG_FILE, COLORS, ALLOWED_THREADS, apply_theme
@@ -102,11 +102,16 @@ from tab_live import LiveProcessingTab
 
 
 class MainWindow(QMainWindow):
+    DEFAULT_WINDOW_SIZE = QSize(950, 750)
+    WINDOW_SCREEN_MARGIN = 8
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("sherpa-vietnamese-asr")
-        self.resize(950, 750)
-        self.center_on_screen()
+        self._initial_window_bounds_scheduled = False
+        self._initial_window_bounds_checked = False
+        self.resize(self.DEFAULT_WINDOW_SIZE)
+        self._resize_for_primary_screen()
         
         # Flag to prevent saving config during initialization
         self._applying_config = False
@@ -121,21 +126,68 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self.apply_config()
 
-    def center_on_screen(self):
-        """Đặt cửa sổ ra giữa màn hình và đảm bảo không bị mất title bar"""
+    def _resize_for_primary_screen(self):
+        """Cap client size and center the window before the native frame exists."""
         try:
-            screen = self.screen() or QApplication.primaryScreen()
-            if screen:
-                screen_geom = screen.availableGeometry()
-                window_geom = self.frameGeometry()
-                window_geom.moveCenter(screen_geom.center())
-                
-                # Đảm bảo title bar không bị che khuất
-                new_top_left = window_geom.topLeft()
-                new_top_left.setY(max(screen_geom.top(), new_top_left.y()))
-                self.move(new_top_left)
+            screen = QApplication.primaryScreen() or self.screen()
+            if not screen:
+                return
+            margin = self.WINDOW_SCREEN_MARGIN
+            work_area = screen.availableGeometry().adjusted(margin, margin, -margin, -margin)
+            if work_area.width() <= 0 or work_area.height() <= 0:
+                return
+            # Keep child layout hints from forcing the top-level frame off-screen.
+            self.setMinimumSize(1, 1)
+            self.resize(
+                min(self.DEFAULT_WINDOW_SIZE.width(), work_area.width()),
+                min(self.DEFAULT_WINDOW_SIZE.height(), work_area.height()),
+            )
+            frame = self.frameGeometry()
+            frame.moveCenter(work_area.center())
+            self.move(frame.topLeft())
         except Exception as e:
-            print(f"[Init] Could not center window: {e}")
+            print(f"[Init] Could not size window for screen: {e}")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._initial_window_bounds_scheduled and not self._initial_window_bounds_checked:
+            self._initial_window_bounds_scheduled = True
+            QTimer.singleShot(0, self._queue_initial_window_bounds_check)
+
+    def _queue_initial_window_bounds_check(self):
+        # Let deferred child layout updates settle before the one-time native-frame check.
+        QTimer.singleShot(0, self._ensure_initial_window_bounds)
+
+    def _ensure_initial_window_bounds(self):
+        """Fit and clamp the native frame once, after the window manager decorates it."""
+        if self._initial_window_bounds_checked:
+            return
+        self._initial_window_bounds_scheduled = False
+        self._initial_window_bounds_checked = True
+
+        screen = self.screen() or QApplication.primaryScreen()
+        if not screen:
+            return
+        margin = self.WINDOW_SCREEN_MARGIN
+        work_area = screen.availableGeometry().adjusted(margin, margin, -margin, -margin)
+        if work_area.width() <= 0 or work_area.height() <= 0:
+            return
+
+        frame = self.frameGeometry()
+        frame_extra_width = frame.width() - self.width()
+        frame_extra_height = frame.height() - self.height()
+        if frame.width() > work_area.width() or frame.height() > work_area.height():
+            self.setMinimumSize(1, 1)
+            self.resize(
+                min(self.width(), max(1, work_area.width() - frame_extra_width)),
+                min(self.height(), max(1, work_area.height() - frame_extra_height)),
+            )
+            frame = self.frameGeometry()
+
+        frame.moveCenter(work_area.center())
+        x = max(work_area.left(), min(frame.left(), work_area.right() - frame.width() + 1))
+        y = max(work_area.top(), min(frame.top(), work_area.bottom() - frame.height() + 1))
+        self.move(x, y)
 
     def keyPressEvent(self, event):
         """Handle global hotkeys"""

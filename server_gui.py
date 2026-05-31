@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
     QGroupBox, QFormLayout, QCheckBox, QMessageBox, QHeaderView,
     QDialog, QDialogButtonBox, QProgressBar, QDoubleSpinBox, QFileDialog,
 )
-from PyQt6.QtCore import QTimer, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QSize, QTimer, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QTextCursor
 
 # Setup paths
@@ -2246,10 +2246,15 @@ class ServiceTab(BaseTab):
 class ServerGUI(QMainWindow):
     """Main window - 7 tabs."""
 
+    DEFAULT_WINDOW_SIZE = QSize(1000, 750)
+    WINDOW_SCREEN_MARGIN = 8
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Sherpa Vietnamese ASR - Server Admin")
-        self.resize(1000, 750)
+        self._initial_window_bounds_scheduled = False
+        self._initial_window_bounds_checked = False
+        self.resize(self.DEFAULT_WINDOW_SIZE)
 
         # Chặn scroll wheel trên spinbox/combobox
         app = QApplication.instance()
@@ -2414,7 +2419,7 @@ class ServerGUI(QMainWindow):
             pass
         self.init_ui()
         self.init_timers()
-        self.center_on_screen()
+        self._resize_for_primary_screen()
 
     def eventFilter(self, obj, event):
         """Chặn scroll wheel trên SpinBox/ComboBox."""
@@ -2466,10 +2471,64 @@ class ServerGUI(QMainWindow):
         self.timer_status.timeout.connect(self.tab_config.refresh)
         self.timer_status.start(5000)
 
-    def center_on_screen(self):
-        screen = QApplication.primaryScreen().geometry()
-        x = (screen.width() - self.width()) // 2
-        y = (screen.height() - self.height()) // 2
+    def _resize_for_primary_screen(self):
+        """Cap client size and center the window before the native frame exists."""
+        screen = QApplication.primaryScreen() or self.screen()
+        if not screen:
+            return
+        margin = self.WINDOW_SCREEN_MARGIN
+        work_area = screen.availableGeometry().adjusted(margin, margin, -margin, -margin)
+        if work_area.width() <= 0 or work_area.height() <= 0:
+            return
+        # Keep child layout hints from forcing the top-level frame off-screen.
+        self.setMinimumSize(1, 1)
+        self.resize(
+            min(self.DEFAULT_WINDOW_SIZE.width(), work_area.width()),
+            min(self.DEFAULT_WINDOW_SIZE.height(), work_area.height()),
+        )
+        frame = self.frameGeometry()
+        frame.moveCenter(work_area.center())
+        self.move(frame.topLeft())
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._initial_window_bounds_scheduled and not self._initial_window_bounds_checked:
+            self._initial_window_bounds_scheduled = True
+            QTimer.singleShot(0, self._queue_initial_window_bounds_check)
+
+    def _queue_initial_window_bounds_check(self):
+        # Let deferred child layout updates settle before the one-time native-frame check.
+        QTimer.singleShot(0, self._ensure_initial_window_bounds)
+
+    def _ensure_initial_window_bounds(self):
+        """Fit and clamp the native frame once, after the window manager decorates it."""
+        if self._initial_window_bounds_checked:
+            return
+        self._initial_window_bounds_scheduled = False
+        self._initial_window_bounds_checked = True
+
+        screen = self.screen() or QApplication.primaryScreen()
+        if not screen:
+            return
+        margin = self.WINDOW_SCREEN_MARGIN
+        work_area = screen.availableGeometry().adjusted(margin, margin, -margin, -margin)
+        if work_area.width() <= 0 or work_area.height() <= 0:
+            return
+
+        frame = self.frameGeometry()
+        frame_extra_width = frame.width() - self.width()
+        frame_extra_height = frame.height() - self.height()
+        if frame.width() > work_area.width() or frame.height() > work_area.height():
+            self.setMinimumSize(1, 1)
+            self.resize(
+                min(self.width(), max(1, work_area.width() - frame_extra_width)),
+                min(self.height(), max(1, work_area.height() - frame_extra_height)),
+            )
+            frame = self.frameGeometry()
+
+        frame.moveCenter(work_area.center())
+        x = max(work_area.left(), min(frame.left(), work_area.right() - frame.width() + 1))
+        y = max(work_area.top(), min(frame.top(), work_area.bottom() - frame.height() + 1))
         self.move(x, y)
 
     def closeEvent(self, event):
