@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import unicodedata
 import html as html_module
+import copy
 from datetime import datetime
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
@@ -15,6 +16,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushBut
                              QMessageBox, QFrame, QToolButton, QLineEdit, QDialog, 
                              QInputDialog, QProgressBar, QFileDialog)
 from PyQt6.QtCore import Qt, QUrl, QTimer
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices
 
 from core.config import BASE_DIR, COLORS, MODEL_DOWNLOAD_INFO
@@ -72,6 +74,9 @@ class LiveProcessingTab(QWidget):
         self.custom_speaker_names = set()
         self.merged_speaker_blocks = []
         self.has_speaker_diarization = False
+        self._speaker_undo_stack = []
+        self._speaker_redo_stack = []
+        self._speaker_history_limit = 100
         self._pending_mic_to_preview = None  # Lưu mic cần preview sau khi UI sẵn sàng
         
         # Track if audio has been saved
@@ -84,7 +89,62 @@ class LiveProcessingTab(QWidget):
         self.last_query = ""
         
         self.init_ui()
+        self._install_speaker_edit_shortcuts()
         self.refresh_microphones(try_restore=True)
+
+    def _install_speaker_edit_shortcuts(self):
+        self._undo_speaker_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self._undo_speaker_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._undo_speaker_shortcut.activated.connect(self.undo_speaker_edit)
+
+        self._redo_speaker_shortcut = QShortcut(QKeySequence("Ctrl+Y"), self)
+        self._redo_speaker_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._redo_speaker_shortcut.activated.connect(self.redo_speaker_edit)
+
+    def _speaker_edit_snapshot(self):
+        return {
+            'clickable_segments': copy.deepcopy(getattr(self, 'clickable_segments', [])),
+            'speaker_name_mapping': copy.deepcopy(self.speaker_name_mapping),
+            'block_speaker_names': copy.deepcopy(self.block_speaker_names),
+            'custom_speaker_names': copy.deepcopy(self.custom_speaker_names),
+            'merged_speaker_blocks': copy.deepcopy(self.merged_speaker_blocks),
+            'has_speaker_diarization': bool(getattr(self, 'has_speaker_diarization', False)),
+        }
+
+    def _restore_speaker_edit_state(self, state, render=True):
+        if not state:
+            return
+        self.clickable_segments = copy.deepcopy(state.get('clickable_segments', []))
+        self.speaker_name_mapping = copy.deepcopy(state.get('speaker_name_mapping', {}))
+        self.block_speaker_names = copy.deepcopy(state.get('block_speaker_names', {}))
+        self.custom_speaker_names = copy.deepcopy(state.get('custom_speaker_names', set()))
+        self.merged_speaker_blocks = copy.deepcopy(state.get('merged_speaker_blocks', []))
+        self.has_speaker_diarization = bool(state.get('has_speaker_diarization', False))
+        if render:
+            self._update_display()
+
+    def _push_speaker_undo_state(self, state=None):
+        snapshot = copy.deepcopy(state) if state is not None else self._speaker_edit_snapshot()
+        self._speaker_undo_stack.append(snapshot)
+        if len(self._speaker_undo_stack) > self._speaker_history_limit:
+            self._speaker_undo_stack.pop(0)
+        self._speaker_redo_stack.clear()
+
+    def _clear_speaker_edit_history(self):
+        self._speaker_undo_stack.clear()
+        self._speaker_redo_stack.clear()
+
+    def undo_speaker_edit(self):
+        if not self._speaker_undo_stack:
+            return
+        self._speaker_redo_stack.append(self._speaker_edit_snapshot())
+        self._restore_speaker_edit_state(self._speaker_undo_stack.pop())
+
+    def redo_speaker_edit(self):
+        if not self._speaker_redo_stack:
+            return
+        self._speaker_undo_stack.append(self._speaker_edit_snapshot())
+        self._restore_speaker_edit_state(self._speaker_redo_stack.pop())
     
     def showEvent(self, event):
         """Được gọi khi tab được hiển thị"""
@@ -1256,6 +1316,7 @@ class LiveProcessingTab(QWidget):
         
         self.current_segment_partials = []
         self.clickable_segments = []
+        self._clear_speaker_edit_history()
         self.segment_counter = 0  # Segment counter tăng dần (0, 1, 2...)
         self._segment_id_counter = 0  # Counter cho split segment
         self._anchor_counter = 0  # Reset anchor counter
@@ -2293,9 +2354,11 @@ class LiveProcessingTab(QWidget):
         
         dialog = SpeakerRenameDialog(speaker_id, current_name, active_speaker_names, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            new_name, apply_to_all = dialog.get_result()
+            result = dialog.get_result()
+            new_name, apply_to_all = result[0], result[1]
             
             if new_name:
+                self._push_speaker_undo_state()
                 if apply_to_all:
                     # FIX: Áp dụng cho tất cả đoạn có cùng TÊN HIỆN TẠI (current_name)
                     self.custom_speaker_names.add(new_name)
@@ -2377,6 +2440,7 @@ class LiveProcessingTab(QWidget):
             print(f"[Live] Dialog accepted: new_name='{new_speaker_name}', scope='{split_scope}'")
             
             if new_speaker_name:
+                self._push_speaker_undo_state()
                 self.custom_speaker_names.add(new_speaker_name)
                 
                 # Tìm vị trí chi tiết: segment nào, chunk nào
@@ -2458,6 +2522,7 @@ class LiveProcessingTab(QWidget):
             
         clickable_idx, chunk_idx, seg_type = location
         print(f"[Live] Found at clickable_idx={clickable_idx}, chunk_idx={chunk_idx}, type={seg_type}")
+        self._push_speaker_undo_state()
         
         # Split segment if we clicked on a partial
         if seg_type == 'text' and chunk_idx >= 0:

@@ -4,13 +4,14 @@ import os
 import re
 import json
 import unicodedata
+import copy
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
                              QFileDialog, QProgressBar, QTextEdit, QComboBox, QSlider, 
                              QCheckBox, QFrame, QFormLayout, QMessageBox, QToolButton, 
                              QTabWidget, QStyle, QDialog)
 from PyQt6.QtCore import Qt, QUrl, QTimer, QThread, pyqtSignal, QObject, QEvent
-from PyQt6.QtGui import QTextCursor
+from PyQt6.QtGui import QTextCursor, QKeySequence, QShortcut
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 from core.config import BASE_DIR, COLORS, MODEL_DOWNLOAD_INFO, DEBUG_LOGGING, ALLOWED_THREADS
@@ -255,6 +256,9 @@ class FileProcessingTab(QWidget):
         self.block_speaker_names = {}
         self.custom_speaker_names = set()
         self.merged_speaker_blocks = []
+        self._speaker_undo_stack = []
+        self._speaker_redo_stack = []
+        self._speaker_history_limit = 100
         
         # JSON load flag
         self.loaded_from_json = False
@@ -274,8 +278,85 @@ class FileProcessingTab(QWidget):
         self._initializing = True
         
         self.init_ui()
+        self._install_speaker_edit_shortcuts()
         
         self._initializing = False
+
+    def _install_speaker_edit_shortcuts(self):
+        self._undo_speaker_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self._undo_speaker_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._undo_speaker_shortcut.activated.connect(self.undo_speaker_edit)
+
+        self._redo_speaker_shortcut = QShortcut(QKeySequence("Ctrl+Y"), self)
+        self._redo_speaker_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._redo_speaker_shortcut.activated.connect(self.redo_speaker_edit)
+
+    def _speaker_edit_snapshot(self):
+        return {
+            'segments': copy.deepcopy(self.segments),
+            'overlap_segments': copy.deepcopy(getattr(self, 'overlap_segments', [])),
+            'speaker_name_mapping': copy.deepcopy(self.speaker_name_mapping),
+            'speaker_colors': copy.deepcopy(self.speaker_colors),
+            'block_speaker_names': copy.deepcopy(self.block_speaker_names),
+            'custom_speaker_names': copy.deepcopy(self.custom_speaker_names),
+            'merged_speaker_blocks': copy.deepcopy(self.merged_speaker_blocks),
+            'has_speaker_diarization': bool(getattr(self, 'has_speaker_diarization', False)),
+            'json_saved': bool(getattr(self, 'json_saved', False)),
+        }
+
+    def _restore_speaker_edit_state(self, state, mark_dirty=None, render=True):
+        if not state:
+            return
+        self.segments = copy.deepcopy(state.get('segments', []))
+        self.overlap_segments = copy.deepcopy(state.get('overlap_segments', []))
+        self.speaker_name_mapping = copy.deepcopy(state.get('speaker_name_mapping', {}))
+        self.speaker_colors = copy.deepcopy(state.get('speaker_colors', {}))
+        self.block_speaker_names = copy.deepcopy(state.get('block_speaker_names', {}))
+        self.custom_speaker_names = copy.deepcopy(state.get('custom_speaker_names', set()))
+        self.merged_speaker_blocks = copy.deepcopy(state.get('merged_speaker_blocks', []))
+        self.has_speaker_diarization = bool(state.get('has_speaker_diarization', False))
+        self.json_saved = bool(state.get('json_saved', False))
+        if mark_dirty is True:
+            self.json_saved = False
+        elif mark_dirty is False:
+            self.json_saved = True
+        self.current_highlight_index = -1
+        self.current_highlight_partner_index = -1
+        if render and self.segments:
+            self.render_text_content(immediate=True)
+        if hasattr(self, 'btn_save_json'):
+            self.btn_save_json.setEnabled(bool(self.segments))
+        if hasattr(self, 'btn_copy_text'):
+            self.btn_copy_text.setEnabled(bool(self.segments))
+
+    def _push_speaker_undo_state(self, state=None):
+        snapshot = copy.deepcopy(state) if state is not None else self._speaker_edit_snapshot()
+        self._speaker_undo_stack.append(snapshot)
+        if len(self._speaker_undo_stack) > self._speaker_history_limit:
+            self._speaker_undo_stack.pop(0)
+        self._speaker_redo_stack.clear()
+
+    def _clear_speaker_edit_history(self):
+        self._speaker_undo_stack.clear()
+        self._speaker_redo_stack.clear()
+
+    def _mark_speaker_edit_changed(self):
+        self.json_saved = False
+        self.merged_speaker_blocks = []
+
+    def undo_speaker_edit(self):
+        if not self._speaker_undo_stack:
+            return
+        self._speaker_redo_stack.append(self._speaker_edit_snapshot())
+        state = self._speaker_undo_stack.pop()
+        self._restore_speaker_edit_state(state, mark_dirty=True)
+
+    def redo_speaker_edit(self):
+        if not self._speaker_redo_stack:
+            return
+        self._speaker_undo_stack.append(self._speaker_edit_snapshot())
+        state = self._speaker_redo_stack.pop()
+        self._restore_speaker_edit_state(state, mark_dirty=True)
     
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -1247,6 +1328,7 @@ class FileProcessingTab(QWidget):
         
         self.loaded_from_json = True
         self.json_saved = True
+        self._clear_speaker_edit_history()
             
         self.btn_save_json.setEnabled(True)
         self.btn_copy_text.setEnabled(True)
@@ -2073,6 +2155,7 @@ class FileProcessingTab(QWidget):
 
         # Reset saved flag for new transcription
         self.json_saved = False
+        self._clear_speaker_edit_history()
 
         # Kiểm tra xem file có JSON tồn tại trên đĩa không
         json_path = os.path.splitext(self.selected_file)[0] + '.asr.json'
@@ -2428,6 +2511,7 @@ class FileProcessingTab(QWidget):
             # Cleanup
             self._pending_text_only_mode = False
             self._pending_json_segments = None
+            self._clear_speaker_edit_history()
             
             # Tạo partials cho mỗi segment (nếu chưa có)
             for seg in self.segments:
@@ -2602,6 +2686,7 @@ class FileProcessingTab(QWidget):
             speaker_tab_text = self.text_speaker_raw_output.toPlainText()
             if speaker_tab_text and speaker_tab_text != "Không có dữ liệu phân tách Người nói.":
                 json_data['speaker_diarization_text'] = speaker_tab_text
+            json_data['transcript_text'] = self._format_current_text_with_speakers()
 
             _save_asr_json_file(json_path, json_data)
             
@@ -2616,6 +2701,38 @@ class FileProcessingTab(QWidget):
             traceback.print_exc()
             QMessageBox.critical(self.window(), "Lỗi", f"Không thể lưu JSON:\n{str(e)}")
     
+    def _format_current_text_with_speakers(self):
+        paragraphs = []
+        current_speaker = None
+        current_texts = []
+
+        def _flush_paragraph():
+            if not current_texts:
+                return
+            if current_speaker:
+                paragraphs.append(f"{current_speaker}:\n{' '.join(current_texts)}")
+            else:
+                paragraphs.append(' '.join(current_texts))
+
+        for seg in self.segments:
+            text = seg.get('text', '').strip()
+            if not text:
+                continue
+
+            speaker = seg.get('speaker', '')
+            speaker_id = seg.get('speaker_id', 0)
+            display_name = self.speaker_name_mapping.get(str(speaker_id), speaker) or ''
+
+            if display_name != current_speaker:
+                _flush_paragraph()
+                current_speaker = display_name
+                current_texts = [text]
+            else:
+                current_texts.append(text)
+
+        _flush_paragraph()
+        return '\n'.join(paragraphs)
+
     def copy_text_to_clipboard(self):
         """Sao chép toàn bộ nội dung văn bản vào clipboard"""
         if not self.segments:
@@ -2664,7 +2781,7 @@ class FileProcessingTab(QWidget):
 
             _flush_paragraph()
 
-            full_text = '\n'.join(paragraphs)
+            full_text = self._format_current_text_with_speakers()
             
             # Copy vào clipboard
             clipboard = QApplication.clipboard()
@@ -2703,6 +2820,7 @@ class FileProcessingTab(QWidget):
 
             # Mark as saved since data was loaded from existing JSON file
             self.json_saved = True
+            self._clear_speaker_edit_history()
 
             print(f"[_load_asr_json] Loaded {len(self.segments)} segments from {json_path}")
             return True
@@ -4118,6 +4236,8 @@ class FileProcessingTab(QWidget):
         dialog = SpeakerRenameDialog(speaker_id_int, current_name, active_speaker_names, self, current_color=current_color)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             new_name, apply_to_all, new_color = dialog.get_result()
+            if new_name or new_color:
+                self._push_speaker_undo_state()
             # Lưu màu (dù có đổi tên hay không)
             if new_color:
                 self.speaker_colors[speaker_id_str] = new_color
@@ -4209,9 +4329,11 @@ class FileProcessingTab(QWidget):
                             self.segments[i]['speaker'] = new_name
                             self.segments[i]['speaker_id'] = target_speaker_id
                 
+                self._mark_speaker_edit_changed()
                 self.render_text_content(immediate=True)
             else:
                 # Chỉ đổi màu, không đổi tên → re-render
+                self._mark_speaker_edit_changed()
                 self.render_text_content(immediate=True)
 
     def _get_speaker_id_from_segment(self, segment):
@@ -4279,6 +4401,7 @@ class FileProcessingTab(QWidget):
             return sentence_idx
         return sentence_idx + 1
     def on_split_speaker_requested(self, anchor_id):
+        pre_edit_state = self._speaker_edit_snapshot()
         """Xử lý khi yêu cầu tách Người nói"""
         # Convert anchor_id to segment index
         if DEBUG_LOGGING:
@@ -4292,6 +4415,7 @@ class FileProcessingTab(QWidget):
             sentence_idx = anchor_id
         
         if sentence_idx >= len(self.segments):
+            self._restore_speaker_edit_state(pre_edit_state)
             return
         
         # Nếu chưa có diarization, khởi tạo tất cả segment với speaker mặc định
@@ -4321,6 +4445,7 @@ class FileProcessingTab(QWidget):
             new_speaker_name, split_scope = dialog.get_result()
             
             if new_speaker_name:
+                self._push_speaker_undo_state(pre_edit_state)
                 self.custom_speaker_names.add(new_speaker_name)
                 
                 if split_scope == "to_end":
@@ -4365,9 +4490,15 @@ class FileProcessingTab(QWidget):
                 # Reset merged_speaker_blocks để render lại từ đầu
                 self.merged_speaker_blocks = []
                 
+                self._mark_speaker_edit_changed()
                 self.render_text_content(immediate=True)
                 # Không hiện popup, render trực tiếp
-    
+            else:
+                self._restore_speaker_edit_state(pre_edit_state)
+
+        else:
+            self._restore_speaker_edit_state(pre_edit_state)
+
     def _find_block_end(self, sentence_idx):
         """Tìm index kết thúc của block chứa sentence_idx"""
         if not self.segments:
@@ -4397,6 +4528,7 @@ class FileProcessingTab(QWidget):
         return 0
     
     def on_merge_speaker_requested(self, anchor_id, direction):
+        pre_edit_state = self._speaker_edit_snapshot()
         """Xử lý khi yêu cầu gộp Người nói"""
         # Convert anchor_id to segment index
         if anchor_id >= 1000000:
@@ -4408,10 +4540,12 @@ class FileProcessingTab(QWidget):
             sentence_idx = anchor_id
         
         if sentence_idx >= len(self.segments):
+            self._restore_speaker_edit_state(pre_edit_state)
             return
         
         # Nếu chưa có diarization, không cần gộp (chỉ có 1 Người nói mặc định)
         if not getattr(self, 'has_speaker_diarization', False):
+            self._restore_speaker_edit_state(pre_edit_state)
             return  # Không hiện popup
         
         current_speaker = self.segments[sentence_idx].get('speaker', 'Người nói 1')
@@ -4435,6 +4569,7 @@ class FileProcessingTab(QWidget):
                     break
             
             if prev_speaker is None:
+                self._restore_speaker_edit_state(pre_edit_state)
                 return  # Không hiện popup
             
             # Gộp từ đầu block đến segment hiện tại vào Người nói trước
@@ -4443,6 +4578,7 @@ class FileProcessingTab(QWidget):
             prev_speaker_id = self.segments[prev_idx].get('speaker_id', 0)
             if DEBUG_LOGGING:
                 print(f"[TAB_FILE][MERGE] Merging from {block_start} to {sentence_idx} into '{prev_speaker}'")
+            self._push_speaker_undo_state(pre_edit_state)
             for i in range(block_start, sentence_idx + 1):
                 old_s = self.segments[i].get('speaker', '')
                 old_id = self.segments[i].get('speaker_id', '')
@@ -4451,6 +4587,7 @@ class FileProcessingTab(QWidget):
                 self.segments[i]['speaker'] = prev_speaker
                 self.segments[i]['speaker_id'] = prev_speaker_id
             self.merged_speaker_blocks = []
+            self._mark_speaker_edit_changed()
             self.render_text_content(immediate=True)
             
         elif direction == 'next':
@@ -4465,16 +4602,19 @@ class FileProcessingTab(QWidget):
                     break
             
             if next_speaker is None:
+                self._restore_speaker_edit_state(pre_edit_state)
                 return  # Không hiện popup
             
             # Gộp từ câu hiện tại đến hết block hiện tại vào Người nói sau
             block_end = self._find_block_end(sentence_idx)
             # Lấy speaker_id của ngướ i nói sau
             next_speaker_id = self.segments[next_idx].get('speaker_id', 0)
+            self._push_speaker_undo_state(pre_edit_state)
             for i in range(sentence_idx, block_end):
                 self.segments[i]['speaker'] = next_speaker
                 self.segments[i]['speaker_id'] = next_speaker_id
             
             # Reset merged_speaker_blocks để render lại từ đầu
             self.merged_speaker_blocks = []
+            self._mark_speaker_edit_changed()
             self.render_text_content(immediate=True)

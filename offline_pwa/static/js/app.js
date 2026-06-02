@@ -43,6 +43,9 @@ let editorState = null;
 let editorPreviewAudioUrl = "";
 let speakerDialogContext = null;
 let editorLastAutoScrollAt = 0;
+const EDITOR_SPEAKER_HISTORY_LIMIT = 100;
+let editorSpeakerUndoStack = [];
+let editorSpeakerRedoStack = [];
 let selectedLibraryItemId = null;
 let selectedLibraryImportPromise = null;
 let libraryDbPromise = null;
@@ -177,7 +180,7 @@ function ensureBuf(current, needed) {
 }
 
 const VAD_SAMPLE_RATE = 16000;
-const AUDIO_DECODER_WORKER = "/js/ffmpeg-decode-worker.js?app=offline-pwa-v140";
+const AUDIO_DECODER_WORKER = "/js/ffmpeg-decode-worker.js?app=offline-pwa-v141";
 // FFmpeg WASM must not force soxr/swr: some browser builds do not expose those engine names.
 const AUDIO_DECODER_RESAMPLER = "ffmpeg-default";
 const VAD_WINDOW_SIZE = 512;
@@ -222,7 +225,7 @@ const USER_CONFIG_SCHEMA = 8;
 const CALIBRATION_PROFILE_KEY = "asr-vn-offline-calibration-v1";
 const CALIBRATION_LAST_REPORT_KEY = "asr-vn-offline-calibration-report-v1";
 const MANIFEST_STORAGE_KEY = "asr-vn-offline-model-manifest-v1";
-const OFFLINE_PWA_CODE_VERSION = "offline-pwa-v140";
+const OFFLINE_PWA_CODE_VERSION = "offline-pwa-v141";
 window.__OFFLINE_PWA_CODE_VERSION = OFFLINE_PWA_CODE_VERSION;
 const OFFLINE_RUNTIME_CACHE_NAME = OFFLINE_PWA_CODE_VERSION;
 const CALIBRATION_CODE_VERSION = "calibration-v2-provider-stage-tolerance-20pct";
@@ -8691,6 +8694,7 @@ function clearEditorResult() {
   revokeEditorPreviewAudioUrl();
   if (editorState?.audioUrl) URL.revokeObjectURL(editorState.audioUrl);
   editorState = null;
+  resetEditorSpeakerHistory();
   const panel = $("result-panel");
   if (panel) panel.style.display = "none";
   const resultContent = $("result-content");
@@ -8729,6 +8733,79 @@ function clearEditorResult() {
   if (player) player.style.display = "none";
   const debugButton = $("btn-export-debug-log");
   if (debugButton) debugButton.disabled = !debugLogEntries.length;
+}
+
+function cloneEditorSpeakerHistoryState() {
+  if (!editorState) return null;
+  const clone = typeof structuredClone === "function"
+    ? (value) => structuredClone(value)
+    : (value) => JSON.parse(JSON.stringify(value));
+  return {
+    segments: clone(editorState.segments || []),
+    speakers: clone(editorState.speakers || {}),
+    rawSpeakerSegments: clone(editorState.rawSpeakerSegments || []),
+    overlapSegments: clone(editorState.overlapSegments || []),
+    speakerDiarizationEnabled: Boolean(editorState.speakerDiarizationEnabled),
+  };
+}
+
+function restoreEditorSpeakerHistoryState(state) {
+  if (!editorState || !state) return;
+  editorState.segments = typeof structuredClone === "function" ? structuredClone(state.segments || []) : JSON.parse(JSON.stringify(state.segments || []));
+  editorState.speakers = typeof structuredClone === "function" ? structuredClone(state.speakers || {}) : JSON.parse(JSON.stringify(state.speakers || {}));
+  editorState.rawSpeakerSegments = typeof structuredClone === "function" ? structuredClone(state.rawSpeakerSegments || []) : JSON.parse(JSON.stringify(state.rawSpeakerSegments || []));
+  editorState.overlapSegments = typeof structuredClone === "function" ? structuredClone(state.overlapSegments || []) : JSON.parse(JSON.stringify(state.overlapSegments || []));
+  editorState.speakerDiarizationEnabled = Boolean(state.speakerDiarizationEnabled);
+  syncEditorSpeakers(editorState.speakers);
+  renderDiarization(editorState.rawSpeakerSegments);
+  renderOverlapSegments(editorState.overlapSegments);
+  renderEditor();
+  scheduleLibraryResultAutosave();
+}
+
+function resetEditorSpeakerHistory() {
+  editorSpeakerUndoStack = [];
+  editorSpeakerRedoStack = [];
+}
+
+function pushEditorSpeakerUndoState() {
+  const state = cloneEditorSpeakerHistoryState();
+  if (!state) return;
+  editorSpeakerUndoStack.push(state);
+  if (editorSpeakerUndoStack.length > EDITOR_SPEAKER_HISTORY_LIMIT) {
+    editorSpeakerUndoStack.shift();
+  }
+  editorSpeakerRedoStack = [];
+}
+
+function undoEditorSpeakerEdit() {
+  if (!editorState || !editorSpeakerUndoStack.length) return;
+  const current = cloneEditorSpeakerHistoryState();
+  if (current) editorSpeakerRedoStack.push(current);
+  restoreEditorSpeakerHistoryState(editorSpeakerUndoStack.pop());
+}
+
+function redoEditorSpeakerEdit() {
+  if (!editorState || !editorSpeakerRedoStack.length) return;
+  const current = cloneEditorSpeakerHistoryState();
+  if (current) editorSpeakerUndoStack.push(current);
+  restoreEditorSpeakerHistoryState(editorSpeakerRedoStack.pop());
+}
+
+function setupEditorSpeakerHistoryShortcuts() {
+  document.addEventListener("keydown", (event) => {
+    const key = (event.key || "").toLowerCase();
+    if (!event.ctrlKey || event.altKey || event.metaKey) return;
+    const target = event.target;
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName)) return;
+    if (key === "z") {
+      event.preventDefault();
+      undoEditorSpeakerEdit();
+    } else if (key === "y") {
+      event.preventDefault();
+      redoEditorSpeakerEdit();
+    }
+  });
 }
 
 function setEditorResult(result) {
@@ -12128,15 +12205,22 @@ function applySpeakerDialog() {
   const colorInput = $("speaker-dialog-color");
   const name = (nameInput?.value || "").trim();
   const color = normalizedColor(colorInput?.value, SPEAKER_COLORS[0]);
+  pushEditorSpeakerUndoState();
 
   if (speakerDialogContext.mode === "split") {
     const block = findEditorSpeakerBlock(speakerDialogContext.segmentIndex);
     if (!block) return;
-    const id = nextEditorSpeakerId();
-    editorState.speakers[id] = {
-      name: name || defaultSpeakerName(id),
-      color: normalizedColor(color, SPEAKER_COLORS[id % SPEAKER_COLORS.length]),
-    };
+    const existingId = findEditorSpeakerIdByName(name);
+    const id = existingId === null ? nextEditorSpeakerId() : existingId;
+    if (!editorState.speakers[id]) {
+      editorState.speakers[id] = {
+        name: name || defaultSpeakerName(id),
+        color: normalizedColor(color, SPEAKER_COLORS[id % SPEAKER_COLORS.length]),
+      };
+    } else {
+      if (name) editorState.speakers[id].name = name;
+      editorState.speakers[id].color = normalizedColor(color, editorState.speakers[id].color);
+    }
     for (let i = block.start; i <= block.end; i += 1) {
       editorState.segments[i].speaker = id;
     }
@@ -12164,6 +12248,7 @@ function mergeEditorSpeakerBlock(segmentIndex, direction) {
     log(direction === "prev" ? "No previous speaker block to merge." : "No next speaker block to merge.");
     return;
   }
+  pushEditorSpeakerUndoState();
   for (let i = block.start; i <= block.end; i += 1) {
     editorState.segments[i].speaker = target.speaker;
   }
@@ -18735,6 +18820,7 @@ function doSplitSpeaker() {
     return;
   }
 
+  pushEditorSpeakerUndoState();
   let targetId = findEditorSpeakerIdByName(name);
   if (targetId === null) {
     targetId = nextEditorSpeakerId();
@@ -18809,16 +18895,23 @@ function applyRenameSpeaker(applyAll) {
     return;
   }
 
+  pushEditorSpeakerUndoState();
   if (applyAll) {
     const meta = speakerMetaFor(ctxSpeakerId);
     if (newName) meta.name = newName;
     if (renameSelectedColor) meta.color = renameSelectedColor;
   } else if (newName) {
-    const newId = nextEditorSpeakerId();
-    editorState.speakers[newId] = {
-      name: newName,
-      color: renameSelectedColor || SPEAKER_COLORS[newId % SPEAKER_COLORS.length],
-    };
+    const existingId = findEditorSpeakerIdByName(newName);
+    const newId = existingId === null ? nextEditorSpeakerId() : existingId;
+    if (!editorState.speakers[newId]) {
+      editorState.speakers[newId] = {
+        name: newName,
+        color: renameSelectedColor || SPEAKER_COLORS[newId % SPEAKER_COLORS.length],
+      };
+    } else {
+      editorState.speakers[newId].name = newName;
+      if (renameSelectedColor) editorState.speakers[newId].color = renameSelectedColor;
+    }
     const block = findEditorSpeakerBlock(ctxTargetSegmentIndex);
     for (let i = block?.start ?? ctxTargetSegmentIndex; i <= (block?.end ?? ctxTargetSegmentIndex); i += 1) {
       editorState.segments[i].speaker = newId;
@@ -18839,6 +18932,7 @@ function mergeEditorSpeakerFromContext(direction) {
   const originalBlock = findEditorSpeakerBlock(ctxTargetSegmentIndex);
   if (!originalBlock) return;
   const fullBlock = !ctxHasSegmentTarget;
+  pushEditorSpeakerUndoState();
   if (direction === "prev") {
     const target = editorState.segments[originalBlock.start - 1];
     if (!target) return;
@@ -19008,6 +19102,7 @@ function setupContextMenuUI() {
 
 // Call setups
 setupPlayerUI();
+setupEditorSpeakerHistoryShortcuts();
 setupContextMenuUI();
 
 // Make sure player panel shows when there is an audio

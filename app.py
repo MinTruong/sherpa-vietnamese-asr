@@ -534,6 +534,9 @@ class MainWindow(QMainWindow):
             msg_box.setWindowTitle("Xác nhận tắt ứng dụng")
             msg_box.setText("<br>".join(messages))
             msg_box.setIcon(QMessageBox.Icon.Warning)
+            btn_save_json = None
+            if has_unsaved_file:
+                btn_save_json = msg_box.addButton("L\u01b0u JSON r\u1ed3i t\u1eaft", QMessageBox.ButtonRole.AcceptRole)
             
             btn_yes = msg_box.addButton("Tắt ứng dụng", QMessageBox.ButtonRole.YesRole)
             btn_no = msg_box.addButton("Hủy", QMessageBox.ButtonRole.NoRole)
@@ -541,7 +544,13 @@ class MainWindow(QMainWindow):
             
             msg_box.exec()
             
-            if msg_box.clickedButton() != btn_yes:
+            clicked = msg_box.clickedButton()
+            if clicked == btn_save_json:
+                file_tab.save_asr_json()
+                if not file_tab.json_saved:
+                    event.ignore()
+                    return
+            elif clicked != btn_yes:
                 event.ignore()
                 return
         

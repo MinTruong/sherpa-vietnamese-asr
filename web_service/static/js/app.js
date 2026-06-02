@@ -253,6 +253,9 @@ window.authToken = null;
 window.appConfig = null;
 let _dirty = false;
 let currentProcessStartedAt = null;
+const SPEAKER_EDIT_HISTORY_LIMIT = 100;
+let speakerUndoStack = [];
+let speakerRedoStack = [];
 
 // === Init ===
 
@@ -260,6 +263,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initUpload();
     initPlayer();
     initContextMenu();
+    setupSpeakerEditShortcuts();
 
     // Disable scroll wheel trên config inputs (tránh thay đổi nhầm)
     document.querySelectorAll('input[type="range"], select').forEach(el => {
@@ -1007,6 +1011,7 @@ function onASRComplete(data) {
     currentASRData = data.result;
     renderASRResult(data.result);
     clearDirty();
+    resetSpeakerEditHistory();
     resetProcessUI();
     loadAudio(currentFileId);
     showToast('Xử lý hoàn tất!', 'success');
@@ -1080,9 +1085,66 @@ function resetProcessUI() {
 function hideResults() {
     document.getElementById('result-panel').style.display = 'none';
     currentASRData = null;
+    resetSpeakerEditHistory();
     clearDirty();
     document.getElementById('btn-save-json').disabled = true;
     document.getElementById('btn-copy').disabled = true;
+}
+
+function cloneASRData(data) {
+    if (!data) return null;
+    if (typeof structuredClone === 'function') {
+        return structuredClone(data);
+    }
+    return JSON.parse(JSON.stringify(data));
+}
+
+function resetSpeakerEditHistory() {
+    speakerUndoStack = [];
+    speakerRedoStack = [];
+}
+
+function pushSpeakerEditUndoState() {
+    if (!currentASRData) return;
+    speakerUndoStack.push(cloneASRData(currentASRData));
+    if (speakerUndoStack.length > SPEAKER_EDIT_HISTORY_LIMIT) {
+        speakerUndoStack.shift();
+    }
+    speakerRedoStack = [];
+}
+
+function restoreSpeakerEditState(state) {
+    if (!state) return;
+    currentASRData = cloneASRData(state);
+    renderASRResult(currentASRData);
+    markDirty();
+}
+
+function undoSpeakerEdit() {
+    if (!speakerUndoStack.length || !currentASRData) return;
+    speakerRedoStack.push(cloneASRData(currentASRData));
+    restoreSpeakerEditState(speakerUndoStack.pop());
+}
+
+function redoSpeakerEdit() {
+    if (!speakerRedoStack.length || !currentASRData) return;
+    speakerUndoStack.push(cloneASRData(currentASRData));
+    restoreSpeakerEditState(speakerRedoStack.pop());
+}
+
+function setupSpeakerEditShortcuts() {
+    document.addEventListener('keydown', (event) => {
+        const key = (event.key || '').toLowerCase();
+        if (!event.ctrlKey || event.altKey || event.metaKey) return;
+        if (event.target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName)) return;
+        if (key === 'z') {
+            event.preventDefault();
+            undoSpeakerEdit();
+        } else if (key === 'y') {
+            event.preventDefault();
+            redoSpeakerEdit();
+        }
+    });
 }
 
 // === Render ASR result ===
@@ -1395,6 +1457,36 @@ function loadJSON() {
     document.getElementById('json-input').click();
 }
 
+function formatCurrentASRTranscriptText() {
+    if (!currentASRData) return '';
+    const segments = currentASRData.segments || [];
+    const speakerNames = currentASRData.speaker_names || {};
+    const hasSpeakers = segments.some(s => s.type === 'speaker');
+
+    if (!hasSpeakers) {
+        return segments.filter(s => s.type === 'text').map(s => s.text || '').join(' ').trim();
+    }
+
+    let text = '';
+    let currentSpeaker = '';
+    let blockTexts = [];
+    for (const seg of segments) {
+        if (seg.type === 'speaker') {
+            if (blockTexts.length) {
+                text += currentSpeaker + ':\n' + blockTexts.join(' ') + '\n\n';
+            }
+            currentSpeaker = speakerNames[seg.speaker_id] || `Ng\u01b0\u1eddi n\u00f3i ${seg.speaker_id + 1}`;
+            blockTexts = [];
+        } else if (seg.type === 'text') {
+            blockTexts.push(seg.text || '');
+        }
+    }
+    if (blockTexts.length) {
+        text += currentSpeaker + ':\n' + blockTexts.join(' ') + '\n';
+    }
+    return text.trim();
+}
+
 async function onJSONSelected(input) {
     if (!input.files.length || !currentFileId) {
         // Neu chua upload audio, upload truoc
@@ -1433,6 +1525,7 @@ async function onJSONSelected(input) {
         const result = await apiFetch(`/api/files/${currentFileId}/result`);
         renderASRResult(result);
         clearDirty();
+        resetSpeakerEditHistory();
         loadAudio(currentFileId);
         showToast('Đã load JSON', 'success');
     } catch (e) {
@@ -1445,6 +1538,19 @@ async function onJSONSelected(input) {
 }
 
 async function saveJSON() {
+    if (currentASRData) {
+        const data = cloneASRData(currentASRData);
+        data.transcript_text = formatCurrentASRTranscriptText();
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (uploadedFile ? uploadedFile.name.replace(/\.[^.]+$/, '') : 'result') + '.asr.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('\u0110\u00e3 t\u1ea3i JSON', 'success');
+        return;
+    }
     if (!currentFileId) return;
     try {
         const resp = await fetch(`/api/files/${currentFileId}/download-json`, {
@@ -1714,6 +1820,7 @@ async function restoreSessionState() {
                 const result = await apiFetch(`/api/files/${currentFileId}/result`);
                 renderASRResult(result);
                 clearDirty();
+                resetSpeakerEditHistory();
                 loadAudio(currentFileId);
             } catch (e) {
                 console.error('Failed to load completed result:', e);

@@ -72,6 +72,46 @@ function findNextSpeaker(segments, segPos) {
     return -1;
 }
 
+function speakerSegmentKey(seg) {
+    return seg && seg.speaker_id !== undefined && seg.speaker_id !== null ? String(seg.speaker_id) : null;
+}
+
+function normalizeSpeakerSeparators(segments) {
+    const normalized = [];
+    let currentSpeaker = null;
+    let hasTextInCurrentBlock = false;
+
+    for (const seg of segments || []) {
+        if (seg.type === 'speaker') {
+            const nextSpeaker = speakerSegmentKey(seg);
+            const previous = normalized[normalized.length - 1];
+            if (!hasTextInCurrentBlock && previous && previous.type === 'speaker') {
+                normalized[normalized.length - 1] = seg;
+                currentSpeaker = nextSpeaker;
+            } else if (nextSpeaker !== currentSpeaker) {
+                normalized.push(seg);
+                currentSpeaker = nextSpeaker;
+                hasTextInCurrentBlock = false;
+            }
+            continue;
+        }
+
+        normalized.push(seg);
+        if (seg.type === 'text') {
+            hasTextInCurrentBlock = true;
+        }
+    }
+
+    return normalized;
+}
+
+function finishSpeakerEdit(message) {
+    currentASRData.segments = normalizeSpeakerSeparators(currentASRData.segments || []);
+    renderASRResult(currentASRData);
+    markDirty();
+    if (message) showToast(message, 'success');
+}
+
 // === SPLIT SPEAKER (client-side) ===
 
 function ctxSplitSpeaker() {
@@ -128,6 +168,7 @@ function doSplitSpeaker() {
 
     const segments = currentASRData.segments;
     const speakerNames = currentASRData.speaker_names || {};
+    pushSpeakerEditUndoState();
 
     // Find or create speaker_id for the new name
     let newSpeakerId = null;
@@ -159,9 +200,7 @@ function doSplitSpeaker() {
     }
 
     currentASRData.speaker_names = speakerNames;
-    renderASRResult(currentASRData);
-    markDirty();
-    showToast('Đã tách người nói', 'success');
+    finishSpeakerEdit('\u0110\u00e3 t\u00e1ch ng\u01b0\u1eddi n\u00f3i');
 }
 
 // === MERGE UP (client-side) ===
@@ -171,6 +210,7 @@ function ctxMergeUp() {
     if (ctxBlockIndex <= 0 || !currentASRData) return;
 
     const segments = currentASRData.segments;
+    pushSpeakerEditUndoState();
 
     if (ctxSegIndex >= 0) {
         // Partial merge: merge from block start to ctxSegIndex (inclusive) into previous block
@@ -207,9 +247,7 @@ function ctxMergeUp() {
         }
     }
 
-    renderASRResult(currentASRData);
-    markDirty();
-    showToast('Đã gộp người nói', 'success');
+    finishSpeakerEdit('\u0110\u00e3 g\u1ed9p ng\u01b0\u1eddi n\u00f3i');
 }
 
 // === MERGE DOWN (client-side) ===
@@ -219,6 +257,7 @@ function ctxMergeDown() {
     if (ctxBlockIndex < 0 || !currentASRData) return;
 
     const segments = currentASRData.segments;
+    pushSpeakerEditUndoState();
 
     if (ctxSegIndex >= 0) {
         // Partial merge: merge from ctxSegIndex to block end into next block
@@ -228,26 +267,27 @@ function ctxMergeDown() {
         // Find the next speaker separator
         const nextSpeakerPos = findNextSpeaker(segments, segPos);
         if (nextSpeakerPos < 0) return; // no next block
+        const nextSpeakerId = segments[nextSpeakerPos].speaker_id;
 
-        // Remove the next speaker separator to merge
-        segments.splice(nextSpeakerPos, 1);
-
-        // If there are segments before ctxSegIndex in the current block, add separator
+        // Keep text before ctxSegIndex as the current speaker, and assign the
+        // selected tail to the next speaker so it merges with the next block.
         const ownerPos = findOwnerSpeaker(segments, segPos);
+        let hasTextBefore = false;
         if (ownerPos >= 0) {
-            // Check if there are text segments between ownerPos and segPos
-            let hasTextBefore = false;
             for (let i = ownerPos + 1; i < segPos; i++) {
                 if (segments[i].type === 'text') { hasTextBefore = true; break; }
             }
-            if (hasTextBefore) {
-                // Insert new speaker separator (from next block) before segPos
-                // The next block's speaker is the one after nextSpeakerPos (which was removed)
-                // Actually we want to assign the next block's speaker to the merged portion
-                // Since we removed the next separator, segments from segPos onward now belong to owner
-                // We need to insert a separator with the NEXT block's speaker before segPos
-                // But we already removed it... let's just keep it as-is (all merge into current block's speaker)
-            }
+        }
+
+        if (hasTextBefore) {
+            segments.splice(segPos, 0, { type: 'speaker', speaker_id: nextSpeakerId });
+            segments.splice(nextSpeakerPos + 1, 1);
+        } else if (ownerPos >= 0) {
+            segments[ownerPos].speaker_id = nextSpeakerId;
+            segments.splice(nextSpeakerPos, 1);
+        } else {
+            segments.splice(segPos, 0, { type: 'speaker', speaker_id: nextSpeakerId });
+            segments.splice(nextSpeakerPos + 1, 1);
         }
     } else {
         // Full block merge: remove the next speaker separator
@@ -267,9 +307,7 @@ function ctxMergeDown() {
         }
     }
 
-    renderASRResult(currentASRData);
-    markDirty();
-    showToast('Đã gộp người nói', 'success');
+    finishSpeakerEdit('\u0110\u00e3 g\u1ed9p ng\u01b0\u1eddi n\u00f3i');
 }
 
 // === RENAME SPEAKER (client-side) ===
@@ -333,6 +371,7 @@ function doRenameSpeaker(applyAll) {
     const speakerNames = currentASRData.speaker_names || {};
     if (!currentASRData.speaker_colors) currentASRData.speaker_colors = {};
     const speakerColors = currentASRData.speaker_colors;
+    pushSpeakerEditUndoState();
 
     // Lưu màu
     if (renameSelectedColor && ctxSpeakerId !== null) {
@@ -343,7 +382,16 @@ function doRenameSpeaker(applyAll) {
         if (applyAll && ctxSpeakerId !== null) {
             speakerNames[ctxSpeakerId] = newName;
         } else {
-            const maxId = Math.max(-1, ...Object.keys(speakerNames).map(Number)) + 1;
+            let maxId = null;
+            for (const [id, name] of Object.entries(speakerNames)) {
+                if (name === newName) {
+                    maxId = Number(id);
+                    break;
+                }
+            }
+            if (maxId === null) {
+                maxId = Math.max(-1, ...Object.keys(speakerNames).map(Number)) + 1;
+            }
             speakerNames[maxId] = newName;
             // Chuyển màu sang speaker_id mới
             if (renameSelectedColor) speakerColors[maxId] = renameSelectedColor;
@@ -362,9 +410,7 @@ function doRenameSpeaker(applyAll) {
         currentASRData.speaker_names = speakerNames;
     }
 
-    renderASRResult(currentASRData);
-    markDirty();
-    showToast(newName ? 'Đã đổi tên người nói' : 'Đã đổi màu người nói', 'success');
+    finishSpeakerEdit(newName ? '\u0110\u00e3 \u0111\u1ed5i t\u00ean ng\u01b0\u1eddi n\u00f3i' : '\u0110\u00e3 \u0111\u1ed5i m\u00e0u ng\u01b0\u1eddi n\u00f3i');
 }
 
 // === COPY ===
