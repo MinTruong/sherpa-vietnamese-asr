@@ -866,19 +866,14 @@ async def upload_file(
     user_id = user["id"] if user else None
     if not user_id and session_id:
         old_files = db.delete_session_files(session_id)
-        _upload_real = os.path.realpath(UPLOAD_DIR)
+        deleted_count = 0
         for fname in old_files:
-            delete_upload_artifacts(fname)
-            import glob as _glob
-            for f_path in _glob.glob(os.path.join(UPLOAD_DIR, f"{fname}*")):
-                # A01: Validate path trước khi xóa
-                if os.path.realpath(f_path).startswith(_upload_real + os.sep):
-                    try:
-                        os.remove(f_path)
-                    except OSError:
-                        pass
+            deleted_count += delete_upload_artifacts(fname)
         if old_files:
-            logger.info(f"Cleaned {len(old_files)} old file(s) for anonymous session {session_id[:8]}")
+            logger.info(
+                f"Cleaned {len(old_files)} old file(s), {deleted_count} artifact(s) "
+                f"for anonymous session {session_id[:8]}"
+            )
 
     # Sanitize filename (chống path traversal)
     import re as _re
@@ -1708,14 +1703,11 @@ async def delete_user_file(
     file_record = db.get_file(file_id)
     if not file_record or file_record["user_id"] != user["id"]:
         raise HTTPException(404, "File not found")
+    if file_record["status"] == "processing":
+        raise HTTPException(400, "Không thể xóa file đang xử lý")
 
-    # A01: Path traversal check trước khi xóa file
-    file_path = os.path.join(UPLOAD_DIR, file_record["stored_filename"])
-    _upload_real = os.path.realpath(UPLOAD_DIR)
-    if os.path.realpath(file_path).startswith(_upload_real + os.sep):
-        for path in [file_path, file_path.rsplit(".", 1)[0] + ".wav"]:
-            if os.path.exists(path):
-                os.remove(path)
+    deleted_count = delete_upload_artifacts(file_record["stored_filename"])
+    logger.info(f"Deleted {deleted_count} upload artifact(s) for file_id={file_id}")
 
     db.delete_file(file_id)
     db.update_user_storage(user["id"])
@@ -1794,26 +1786,17 @@ async def delete_meeting(meeting_id: int, user: dict = Depends(require_auth)):
     if not meeting or meeting["user_id"] != user["id"]:
         raise HTTPException(404, "Meeting not found")
 
+    file_id = meeting["file_id"]
+    file_record = db.get_file(file_id)
+
     # Không cho xóa nếu đang xử lý
-    if meeting["status"] == "processing":
+    if meeting["status"] == "processing" or (file_record and file_record["status"] == "processing"):
         raise HTTPException(400, "Không thể xóa cuộc họp đang xử lý")
 
-    file_id = meeting["file_id"]
-
-    # A01: Path traversal check trước khi xóa file
-    import glob as glob_mod
-    file_path = os.path.join(UPLOAD_DIR, meeting["stored_filename"])
-    _upload_real = os.path.realpath(UPLOAD_DIR)
-    if os.path.realpath(file_path).startswith(_upload_real + os.sep):
-        for f in glob_mod.glob(file_path + "*"):
-            if os.path.realpath(f).startswith(_upload_real + os.sep):
-                try:
-                    os.remove(f)
-                except OSError:
-                    pass
+    deleted_count = delete_upload_artifacts(meeting["stored_filename"])
+    logger.info(f"Deleted {deleted_count} upload artifact(s) for meeting_id={meeting_id}")
 
     # Xóa DB records
-    db.delete_meeting(meeting_id)
     db.delete_file(file_id)
     db.update_user_storage(user["id"])
 

@@ -133,19 +133,13 @@ class SessionManager:
         # Nếu anonymous: xóa files vật lý + cache + DB records
         if session["is_anonymous"]:
             stored_files = db.delete_session_files(session_id)
+            deleted_count = 0
             for filename in stored_files:
-                delete_upload_artifacts(filename)
-                base_path = os.path.join(UPLOAD_DIR, filename)
-                # Xóa file gốc + mọi file phái sinh (*.wav, *.tmp, etc.) bằng glob
-                try:
-                    for f in glob.glob(base_path + "*"):
-                        os.remove(f)
-                        logger.debug(f"Deleted cache file: {f}")
-                    # Xóa file gốc nếu chưa match glob (trường hợp tên đặc biệt)
-                    if os.path.exists(base_path):
-                        os.remove(base_path)
-                except OSError as e:
-                    logger.error(f"Error deleting file {base_path}: {e}")
+                deleted_count += delete_upload_artifacts(filename)
+            if stored_files:
+                logger.info(
+                    f"Deleted {deleted_count} upload artifact(s) for anonymous session {session_id[:8]}"
+                )
 
         # Expire session
         db.expire_session(session_id)

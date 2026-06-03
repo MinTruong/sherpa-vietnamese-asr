@@ -476,6 +476,7 @@ class Database:
     def delete_file(self, file_id: int):
         with self.connect() as conn:
             conn.execute("DELETE FROM queue WHERE file_id = ?", (file_id,))
+            conn.execute("DELETE FROM meetings WHERE file_id = ?", (file_id,))
             conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
 
     def delete_session_files(self, session_id: str) -> list:
