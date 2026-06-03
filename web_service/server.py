@@ -28,7 +28,9 @@ from web_service.auth import (
     authenticate_user, create_token, decode_token, hash_password,
     change_password, ensure_admin,
 )
-from web_service.session_manager import session_manager, ws_manager
+from web_service.session_manager import (
+    session_manager, ws_manager, delete_upload_artifacts,
+)
 from web_service.queue_manager import queue_manager
 
 logger = logging.getLogger("asr.server")
@@ -866,6 +868,7 @@ async def upload_file(
         old_files = db.delete_session_files(session_id)
         _upload_real = os.path.realpath(UPLOAD_DIR)
         for fname in old_files:
+            delete_upload_artifacts(fname)
             import glob as _glob
             for f_path in _glob.glob(os.path.join(UPLOAD_DIR, f"{fname}*")):
                 # A01: Validate path trước khi xóa
@@ -1205,6 +1208,48 @@ async def file_audio(
     raise HTTPException(404, "Audio file not found")
 
 
+_AUDIO_MEDIA_TYPES = {
+    "mp3": "audio/mpeg", "wav": "audio/wav", "m4a": "audio/mp4",
+    "ogg": "audio/ogg", "flac": "audio/flac", "aac": "audio/aac",
+    "wma": "audio/x-ms-wma", "opus": "audio/opus",
+    "mp4": "video/mp4", "webm": "video/webm",
+}
+
+
+def _safe_original_audio_filename(original_filename: str) -> str:
+    import html as _html
+    name = _html.unescape(str(original_filename or "audio").replace("\x00", ""))
+    name = name.replace("\r", " ").replace("\n", " ").strip()
+    name = os.path.basename(name.replace("\\", os.sep))
+    return name[:240] or "audio"
+
+
+@app.get("/api/files/{file_id}/download-audio")
+async def download_audio(
+    file_id: int,
+    session_id: str = Depends(get_session_id),
+    user: Optional[dict] = Depends(get_current_user),
+):
+    """Download lại file audio/video gốc đã upload."""
+    file_record = db.get_file(file_id)
+    check_file_access(file_record, session_id, user)
+
+    file_path = os.path.join(UPLOAD_DIR, file_record["stored_filename"])
+    _upload_real = os.path.realpath(UPLOAD_DIR)
+    if not os.path.realpath(file_path).startswith(_upload_real + os.sep):
+        raise HTTPException(400, "Invalid file path")
+    if not os.path.exists(file_path):
+        raise HTTPException(404, "Audio file not found")
+
+    filename = _safe_original_audio_filename(file_record["original_filename"])
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return FileResponse(
+        file_path,
+        media_type=_AUDIO_MEDIA_TYPES.get(ext, "application/octet-stream"),
+        filename=filename,
+    )
+
+
 @app.get("/api/files/{file_id}/download-json")
 async def download_json(
     file_id: int,
@@ -1529,11 +1574,14 @@ async def login(request: Request, session_id: str = Depends(get_session_id)):
     new_session_id = session_manager.create_session(
         ip_address=ip, user_agent=ua, user_id=user["id"]
     )
-    # Expire session anonymous cũ
+    # Xóa session anonymous cũ cùng toàn bộ file/cache tạm của anonymous.
     if session_id:
         old_session = db.get_session(session_id)
         if old_session and old_session["is_anonymous"]:
-            db.expire_session(session_id)
+            session_manager.kill_session(
+                session_id,
+                kill_processes_callback=queue_manager.cancel,
+            )
 
     response = JSONResponse({
         "token": token,

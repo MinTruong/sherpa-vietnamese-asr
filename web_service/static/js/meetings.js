@@ -173,6 +173,8 @@ async function loadMeeting(meetingId) {
             renderASRResult(data.asr_result);
             clearDirty();
             currentFileId = data.file_id;
+            uploadedFile = null;
+            if (typeof syncDownloadAudioButton === 'function') syncDownloadAudioButton();
             loadAudioFromUrl(`/api/meetings/${meetingId}/audio`);
 
             document.querySelector('.drop-zone-text').style.display = 'none';

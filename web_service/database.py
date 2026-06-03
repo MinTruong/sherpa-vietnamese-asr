@@ -4,6 +4,7 @@ Dùng sqlite3 thuần (sync) với connection pool + in-memory cache.
 """
 
 import os
+import shutil
 import sqlite3
 import json
 import time
@@ -12,7 +13,7 @@ from queue import Queue, Empty
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
-from web_service.config import DB_PATH
+from web_service.config import DB_PATH, DB_EXAMPLE_PATH
 
 # === Schema ===
 
@@ -115,6 +116,7 @@ class Database:
     def __init__(self, db_path: str = None):
         self.db_path = db_path or DB_PATH
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self._seed_from_example()
         self._pool: Queue = Queue(maxsize=self.POOL_SIZE)
         self._pool_lock = threading.Lock()
         # In-memory cache cho session lookups (hot path)
@@ -126,6 +128,14 @@ class Database:
         self._user_cache_lock = threading.Lock()
         self._USER_CACHE_TTL = 10.0  # seconds
         self._init_db()
+
+    def _seed_from_example(self):
+        """Lan chay dau: clone DB example neu co, khong bao gio ghi de DB that."""
+        if os.path.exists(self.db_path):
+            return
+        example_path = DB_EXAMPLE_PATH if self.db_path == DB_PATH else self.db_path + ".example"
+        if os.path.exists(example_path):
+            shutil.copy2(example_path, self.db_path)
 
     def _create_connection(self) -> sqlite3.Connection:
         """Tạo connection mới với PRAGMAs đã cấu hình."""

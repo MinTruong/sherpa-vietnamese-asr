@@ -71,6 +71,7 @@ function setupCspSafeEventDelegation() {
         'cancel-process': () => cancelProcess(),
         'load-json': () => loadJSON(),
         'save-json': () => saveJSON(),
+        'download-audio': () => downloadAudio(),
         'copy-text': () => copyText(),
         'switch-tab': (_event, target) => switchTab(target.dataset.tab),
         'search-nav': (_event, target) => searchNav(parseInt(target.dataset.dir, 10)),
@@ -1372,6 +1373,7 @@ function renderASRResult(data) {
     document.getElementById('result-panel').style.display = 'flex';
     document.getElementById('btn-save-json').disabled = false;
     document.getElementById('btn-copy').disabled = false;
+    if (typeof syncDownloadAudioButton === 'function') syncDownloadAudioButton();
 
     // Render quality strip + timing info
     renderQualityStrip(data.quality_info);
@@ -1716,6 +1718,71 @@ async function saveJSON() {
     }
 }
 
+function triggerFileDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'audio';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function filenameFromContentDisposition(header) {
+    if (!header) return '';
+    const utf8Match = header.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match) {
+        try {
+            return decodeURIComponent(utf8Match[1].trim());
+        } catch (e) {
+            return utf8Match[1].trim();
+        }
+    }
+    const asciiMatch = header.match(/filename="?([^";]+)"?/i);
+    return asciiMatch ? asciiMatch[1].trim() : '';
+}
+
+function currentAudioDownloadName() {
+    if (uploadedFile?.name) return uploadedFile.name;
+    const displayedName = document.getElementById('file-name')?.textContent?.trim();
+    return displayedName || 'audio';
+}
+
+async function downloadAudio() {
+    try {
+        if (uploadedFile) {
+            triggerFileDownload(uploadedFile, uploadedFile.name || 'audio');
+            showToast('Đã tải audio', 'success');
+            return;
+        }
+
+        if (!currentFileId) {
+            showToast('Chưa có file audio để tải', 'error');
+            return;
+        }
+
+        const resp = await fetch(`/api/files/${currentFileId}/download-audio`, {
+            headers: window.authToken ? { 'Authorization': 'Bearer ' + window.authToken } : {},
+            credentials: 'same-origin',
+        });
+        if (!resp.ok) {
+            let msg = 'Download failed';
+            try {
+                msg = (await resp.text()) || msg;
+            } catch (e) { }
+            throw new Error(msg);
+        }
+
+        const blob = await resp.blob();
+        const filename = filenameFromContentDisposition(resp.headers.get('Content-Disposition')) || currentAudioDownloadName();
+        triggerFileDownload(blob, filename);
+        showToast('Đã tải audio', 'success');
+    } catch (e) {
+        showToast('Lỗi: ' + e.message, 'error');
+    }
+}
+
 function copyText() {
     if (!currentASRData) return;
 
@@ -1779,6 +1846,15 @@ async function doLogin() {
         });
 
         window.authToken = '__cookie__';
+        currentFileId = null;
+        if (uploadedFile) {
+            hideResults();
+            if (typeof loadLocalAudioPreview === 'function') loadLocalAudioPreview(uploadedFile);
+            if (typeof syncDownloadAudioButton === 'function') syncDownloadAudioButton();
+        } else {
+            clearFile();
+        }
+        if (typeof reconnectWebSocket === 'function') reconnectWebSocket();
         showLoggedIn(resp.user);
         hideLoginModal();
         showToast(`Xin chào, ${resp.user.username}!`, 'success');
@@ -1926,6 +2002,7 @@ async function restoreSessionState() {
         // Uu tien queue_item (dang waiting/processing)
         if (status.queue_item) {
             currentFileId = status.queue_item.file_id;
+            if (typeof syncDownloadAudioButton === 'function') syncDownloadAudioButton();
 
             // Hien thi thong tin file
             document.querySelector('.drop-zone-text').style.display = 'none';
@@ -1951,6 +2028,7 @@ async function restoreSessionState() {
         // Khong co queue active -> check file gan nhat da completed
         if (status.latest_file && status.latest_file.has_result) {
             currentFileId = status.latest_file.file_id;
+            if (typeof syncDownloadAudioButton === 'function') syncDownloadAudioButton();
 
             // Hien thi ten file
             document.querySelector('.drop-zone-text').style.display = 'none';
@@ -1987,7 +2065,7 @@ function loadAudioFromUrl(url) {
     // Luu lai URL goc de co the reload khi mobile browser giai phong audio
     window._audioOriginalUrl = url;
     // Fetch as blob to include auth header
-    fetch(url, { headers }).then(r => r.blob()).then(blob => {
+    fetch(url, { headers, credentials: 'same-origin' }).then(r => r.blob()).then(blob => {
         const blobUrl = URL.createObjectURL(blob);
         audio.src = blobUrl;
         lastAudioSrc = blobUrl;

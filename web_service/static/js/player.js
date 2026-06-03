@@ -33,7 +33,7 @@ function reloadAudio(onReady) {
         if (window.authToken) {
             headers['Authorization'] = 'Bearer ' + window.authToken;
         }
-        fetch(window._audioOriginalUrl, { headers })
+        fetch(window._audioOriginalUrl, { headers, credentials: 'same-origin' })
             .then(r => r.blob())
             .then(blob => {
                 lastAudioSrc = URL.createObjectURL(blob);

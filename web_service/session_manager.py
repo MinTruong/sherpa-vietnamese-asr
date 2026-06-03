@@ -18,6 +18,37 @@ from web_service.database import db
 logger = logging.getLogger("asr.session")
 
 
+def delete_upload_artifacts(stored_filename: str) -> int:
+    """Delete an uploaded file and derived artifacts that share its upload UUID."""
+    if not stored_filename:
+        return 0
+
+    upload_real = os.path.realpath(UPLOAD_DIR)
+    safe_name = os.path.basename(stored_filename)
+    base_path = os.path.join(UPLOAD_DIR, safe_name)
+    stem_path = os.path.splitext(base_path)[0]
+    uuid_prefix = safe_name.split("_", 1)[0]
+    candidates = set()
+    patterns = [base_path, base_path + "*", stem_path + ".*", stem_path + "*"]
+    if len(uuid_prefix) == 32 and all(ch in "0123456789abcdefABCDEF" for ch in uuid_prefix):
+        patterns.insert(0, os.path.join(UPLOAD_DIR, uuid_prefix + "*"))
+    for pattern in patterns:
+        candidates.update(glob.glob(pattern))
+
+    deleted = 0
+    for path in candidates:
+        try:
+            real_path = os.path.realpath(path)
+            if not real_path.startswith(upload_real + os.sep) or not os.path.isfile(real_path):
+                continue
+            os.remove(real_path)
+            deleted += 1
+            logger.debug(f"Deleted cache file: {real_path}")
+        except OSError as e:
+            logger.error(f"Error deleting file {path}: {e}")
+    return deleted
+
+
 class WebSocketManager:
     """Quản lý tất cả WebSocket connections."""
 
@@ -103,6 +134,7 @@ class SessionManager:
         if session["is_anonymous"]:
             stored_files = db.delete_session_files(session_id)
             for filename in stored_files:
+                delete_upload_artifacts(filename)
                 base_path = os.path.join(UPLOAD_DIR, filename)
                 # Xóa file gốc + mọi file phái sinh (*.wav, *.tmp, etc.) bằng glob
                 try:

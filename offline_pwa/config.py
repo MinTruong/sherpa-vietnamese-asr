@@ -7,10 +7,12 @@ browser after the first install/download step.
 
 import configparser
 import os
+import shutil
 
 from core.config import BASE_DIR
 
 CONFIG_FILE = os.path.join(BASE_DIR, "config.ini")
+CONFIG_EXAMPLE_FILE = CONFIG_FILE + ".example"
 STATIC_DIR = os.path.join(BASE_DIR, "offline_pwa", "static")
 MANIFEST_FILE = os.path.join(BASE_DIR, "offline_pwa", "model_manifest.json")
 
@@ -33,8 +35,12 @@ class OfflinePWAConfig:
 
     def load(self):
         changed = False
+        if not os.path.exists(CONFIG_FILE) and os.path.exists(CONFIG_EXAMPLE_FILE):
+            shutil.copy2(CONFIG_EXAMPLE_FILE, CONFIG_FILE)
+
+        self._config.clear()
         if os.path.exists(CONFIG_FILE):
-            self._config.read(CONFIG_FILE, encoding="utf-8")
+            self._config.read(CONFIG_FILE, encoding="utf-8-sig")
 
         if not self._config.has_section("OfflinePWA"):
             self._config.add_section("OfflinePWA")

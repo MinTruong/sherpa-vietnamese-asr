@@ -6,6 +6,7 @@ Dua tren build_portable.py nhung them web_service/ va loai tru streaming model.
 Usage: python build-portable/build_portable_online.py
 """
 import io
+import ast
 import hashlib
 import importlib.util
 import json
@@ -64,7 +65,6 @@ ONLINE_SOURCE_FILES = [
     "server_launcher.py",
     "server_gui.py",
     "service_installer.py",
-    "config.ini",
     "hotword.txt",           # hotwords cho Sherpa-ONNX
     "verb-form-vocab.txt",
     "speaker_hotkeys.json",
@@ -247,6 +247,82 @@ def copy_venv_packages_services():
     return True
 
 
+def _write_config_example_online():
+    """Ship config.ini.example only; runtime creates config.ini on first run."""
+    import configparser
+
+    src = PROJECT_ROOT / "config.ini"
+    dst = DIST_DIR_ONLINE / "config.ini.example"
+    runtime_config = DIST_DIR_ONLINE / "config.ini"
+    if runtime_config.exists():
+        runtime_config.unlink()
+
+    if not src.exists():
+        raise RuntimeError("config.ini not found; cannot create config.ini.example")
+
+    cfg = configparser.ConfigParser()
+    cfg.read(src, encoding="utf-8-sig")
+
+    if not cfg.has_section("ServerSettings"):
+        cfg.add_section("ServerSettings")
+    server_overrides = {
+        "host": "0.0.0.0",
+        "admin_password_hash": "",
+        "summarizer_model_path": "",
+        "summarizer_enabled": "0",
+    }
+    for key, value in server_overrides.items():
+        cfg.set("ServerSettings", key, value)
+
+    if not cfg.has_section("OfflinePWA"):
+        cfg.add_section("OfflinePWA")
+    offline_defaults = {
+        "enabled": "true",
+        "port": "8444",
+        "model_source": "bundled_server",
+        "model_proxy_enabled": "false",
+        "cache_version": "1",
+        "max_model_download_mb": "8192",
+    }
+    for key, value in offline_defaults.items():
+        cfg.set("OfflinePWA", key, value)
+
+    with open(dst, "w", encoding="utf-8") as f:
+        cfg.write(f)
+    print("  [OK] config.ini.example created; runtime config.ini is not shipped")
+
+
+def _load_database_schema_sql() -> str:
+    """Read SCHEMA_SQL without importing web_service.database and touching runtime DB."""
+    source = (PROJECT_ROOT / "web_service" / "database.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        names = [target.id for target in node.targets if isinstance(target, ast.Name)]
+        if "SCHEMA_SQL" in names and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            return node.value.value
+    raise RuntimeError("SCHEMA_SQL not found in web_service/database.py")
+
+
+def _write_db_example_online():
+    """Ship an empty schema DB example; runtime never overwrites asr.db."""
+    import sqlite3
+
+    db_example = DIST_DIR_ONLINE / "web_service" / "data" / "asr.db.example"
+    db_example.parent.mkdir(parents=True, exist_ok=True)
+    if db_example.exists():
+        db_example.unlink()
+
+    conn = sqlite3.connect(db_example)
+    try:
+        conn.executescript(_load_database_schema_sql())
+        conn.commit()
+    finally:
+        conn.close()
+    print("  [OK] web_service/data/asr.db.example created")
+
+
 def copy_source_files_online():
     """Copy source files cho ban online"""
     print("[SRC] Copying online source files...")
@@ -258,31 +334,7 @@ def copy_source_files_online():
         else:
             print(f"  [WARN] Not found: {f}")
 
-    # Portable build: bind 0.0.0.0 thay vì IP cố định của máy dev
-    config_dst = DIST_DIR_ONLINE / "config.ini"
-    if config_dst.exists():
-        import configparser
-        cfg = configparser.ConfigParser()
-        cfg.read(config_dst, encoding="utf-8")
-        if cfg.has_section("ServerSettings"):
-            cfg.set("ServerSettings", "host", "0.0.0.0")
-        if not cfg.has_section("OfflinePWA"):
-            cfg.add_section("OfflinePWA")
-        offline_defaults = {
-            "enabled": "true",
-            "port": "8444",
-            "model_source": "bundled_server",
-            "model_proxy_enabled": "false",
-            "cache_version": "1",
-            "max_model_download_mb": "8192",
-        }
-        for key, value in offline_defaults.items():
-            if not cfg.has_option("OfflinePWA", key):
-                cfg.set("OfflinePWA", key, value)
-        if cfg.has_section("ServerSettings"):
-            with open(config_dst, "w", encoding="utf-8") as f:
-                cfg.write(f)
-            print("  [OK] config.ini: host set to 0.0.0.0, OfflinePWA defaults added")
+    _write_config_example_online()
 
     # Copy core/ module
     core_src = PROJECT_ROOT / "core"
@@ -304,6 +356,7 @@ def copy_source_files_online():
     (ws_dst / "data" / "uploads").mkdir(parents=True, exist_ok=True)
     (ws_dst / "data" / "logs").mkdir(parents=True, exist_ok=True)
     (ws_dst / "certs").mkdir(parents=True, exist_ok=True)
+    _write_db_example_online()
     print("  [OK] web_service/ copied")
 
     # Copy offline_pwa/ module and static shell
@@ -736,7 +789,7 @@ def create_launcher_online():
         'set "HTTP_MODE=0"\n'
         'set "PWA_ENABLED=1"\n'
         'set "PWA_PORT=8444"\n'
-        'for /f "tokens=1,* delims==" %%A in (\'"%PYTHON_EXE%" -c "import configparser, os; c=configparser.ConfigParser(); c.read(os.path.join(os.environ[\'BASE_DIR\'], \'config.ini\'), encoding=\'utf-8\'); s=c[\'ServerSettings\'] if c.has_section(\'ServerSettings\') else {}; p=c[\'OfflinePWA\'] if c.has_section(\'OfflinePWA\') else {}; v=p.get(\'enabled\',\'true\').strip().lower(); print(\'HOST=\'+s.get(\'host\',\'0.0.0.0\')); print(\'PORT=\'+s.get(\'port\',\'8443\')); print(\'HTTP_MODE=\'+s.get(\'http_mode\',\'0\')); print(\'PWA_ENABLED=\'+(\'1\' if v in (\'1\',\'true\',\'yes\',\'on\') else \'0\')); print(\'PWA_PORT=\'+p.get(\'port\',\'8444\'))" 2^>nul\') do set "%%A=%%B"\n'
+        'for /f "tokens=1,* delims==" %%A in (\'"%PYTHON_EXE%" -c "import configparser, os; p=os.path.join(os.environ[\'BASE_DIR\'], \'config.ini\'); p=p if os.path.exists(p) else p+\'.example\'; c=configparser.ConfigParser(); c.read(p, encoding=\'utf-8-sig\'); s=c[\'ServerSettings\'] if c.has_section(\'ServerSettings\') else {}; pwa=c[\'OfflinePWA\'] if c.has_section(\'OfflinePWA\') else {}; v=pwa.get(\'enabled\',\'true\').strip().lower(); print(\'HOST=\'+s.get(\'host\',\'0.0.0.0\')); print(\'PORT=\'+s.get(\'port\',\'8443\')); print(\'HTTP_MODE=\'+s.get(\'http_mode\',\'0\')); print(\'PWA_ENABLED=\'+(\'1\' if v in (\'1\',\'true\',\'yes\',\'on\') else \'0\')); print(\'PWA_PORT=\'+pwa.get(\'port\',\'8444\'))" 2^>nul\') do set "%%A=%%B"\n'
         'if "%HTTP_MODE%"=="1" (set "PROTO=http") else (set "PROTO=https")\n'
         '\n'
         'if "%1"=="--no-gui" goto :headless\n'
@@ -920,7 +973,7 @@ def main():
             "python/python312._pth",
             "server_launcher.py",
             "server_gui.py",
-            "config.ini",
+            "config.ini.example",
             "ffmpeg.exe",
             "ffprobe.exe",
             "core/__init__.py",
@@ -934,6 +987,7 @@ def main():
             "web_service/server.py",
             "web_service/config.py",
             "web_service/database.py",
+            "web_service/data/asr.db.example",
             "web_service/auth.py",
             "web_service/session_manager.py",
             "web_service/queue_manager.py",
@@ -999,6 +1053,21 @@ def main():
         for f in critical:
             if not (DIST_DIR_ONLINE / f).exists():
                 missing.append(f"  [MISS] {f}")
+        forbidden_runtime_files = [
+            "config.ini",
+            "web_service/data/asr.db",
+            "web_service/data/asr.db-wal",
+            "web_service/data/asr.db-shm",
+            "web_service/data/.jwt_secret",
+            "web_service/data/active_tls_cert.crt",
+            "web_service/certs/server.crt",
+            "web_service/certs/server.key",
+            "web_service/certs/custom.crt",
+            "web_service/certs/custom.key",
+        ]
+        for f in forbidden_runtime_files:
+            if (DIST_DIR_ONLINE / f).exists():
+                missing.append(f"  [BAD] runtime file should not be shipped: {f}")
         for pkg in required_pkgs:
             if not (pkg_dir / pkg).exists():
                 missing.append(f"  [MISS] package: {pkg}")

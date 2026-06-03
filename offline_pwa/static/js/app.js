@@ -2776,6 +2776,7 @@ async function requiredOfflineStatus() {
 function updateProcessButtonState() {
   const button = $("btn-process");
   const benchmarkButton = $("btn-benchmark");
+  const downloadAudioButton = $("btn-download-audio");
   const disabled = !selectedAudioFile || !offlineBootstrapReady || offlineBootstrapBusy || calibrationBusy || Boolean(selectedLibraryImportPromise);
   const title = selectedLibraryImportPromise
     ? "Đang lưu file nguồn."
@@ -2787,6 +2788,9 @@ function updateProcessButtonState() {
   if (benchmarkButton) {
     benchmarkButton.disabled = disabled;
     benchmarkButton.title = title || "Chạy benchmark WASM/WebGPU và xuất file log.";
+  }
+  if (downloadAudioButton) {
+    downloadAudioButton.disabled = !selectedAudioFile;
   }
   const recalibrationButton = $("btn-recalibration");
   if (recalibrationButton) {
@@ -9211,6 +9215,21 @@ function downloadBlob(blob, filename) {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function selectedAudioDownloadName() {
+  if (selectedAudioFile?.name) return selectedAudioFile.name;
+  const displayedName = $("file-name")?.textContent?.trim();
+  return displayedName || "audio";
+}
+
+function downloadSelectedAudioFile() {
+  if (!selectedAudioFile) {
+    showToast("Chưa có file audio để tải", "error");
+    return;
+  }
+  downloadBlob(selectedAudioFile, selectedAudioDownloadName());
+  showToast("Đã tải audio", "success");
 }
 
 async function writeTextFileWithPicker(filename, text, mimeType, description, extension) {
@@ -16652,6 +16671,7 @@ function setupInstallPrompt() {
 
 function setupEditorEvents() {
   $("btn-save-json")?.addEventListener("click", saveEditorAsrJson);
+  $("btn-download-audio")?.addEventListener("click", downloadSelectedAudioFile);
   $("btn-copy-text")?.addEventListener("click", copyEditorText);
   $("btn-export-transcript")?.addEventListener("click", exportEditorTranscript);
   $("btn-export-debug-log")?.addEventListener("click", exportDebugLog);

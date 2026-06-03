@@ -3,6 +3,7 @@ Web service configuration - doc/ghi config.ini section [ServerSettings]
 """
 
 import os
+import shutil
 import configparser
 
 from core.config import BASE_DIR, ALLOWED_THREADS
@@ -13,7 +14,9 @@ UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 CERTS_DIR = os.path.join(BASE_DIR, "web_service", "certs")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
 DB_PATH = os.path.join(DATA_DIR, "asr.db")
+DB_EXAMPLE_PATH = DB_PATH + ".example"
 CONFIG_FILE = os.path.join(BASE_DIR, "config.ini")
+CONFIG_EXAMPLE_FILE = CONFIG_FILE + ".example"
 
 # Dam bao thu muc ton tai
 for d in [DATA_DIR, UPLOAD_DIR, CERTS_DIR, LOG_DIR]:
@@ -54,9 +57,14 @@ class ServerConfig:
         self.load()
 
     def load(self):
-        """Doc config.ini, tao section ServerSettings neu chua co"""
+        """Doc config.ini, tao tu config.ini.example neu la lan chay dau."""
+        first_run = not os.path.exists(CONFIG_FILE)
+        if first_run and os.path.exists(CONFIG_EXAMPLE_FILE):
+            shutil.copy2(CONFIG_EXAMPLE_FILE, CONFIG_FILE)
+
+        self._config.clear()
         if os.path.exists(CONFIG_FILE):
-            self._config.read(CONFIG_FILE, encoding="utf-8")
+            self._config.read(CONFIG_FILE, encoding="utf-8-sig")
 
         if not self._config.has_section("ServerSettings"):
             self._config.add_section("ServerSettings")
@@ -77,6 +85,9 @@ class ServerConfig:
             models_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
             if os.path.isdir(os.path.join(models_dir, self.DEFAULTS["default_asr_model"])):
                 self._config.set("ServerSettings", "default_asr_model", self.DEFAULTS["default_asr_model"])
+
+        if first_run:
+            self.save()
 
     def save(self):
         """Ghi config.ini (giu nguyen cac section khac)"""

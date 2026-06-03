@@ -3,6 +3,11 @@
 let currentFileId = null;
 let uploadedFile = null;
 
+function syncDownloadAudioButton() {
+    const btn = document.getElementById('btn-download-audio');
+    if (btn) btn.disabled = !(uploadedFile || currentFileId);
+}
+
 function initUpload() {
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
@@ -101,6 +106,7 @@ function selectFile(file) {
 
     // Enable buttons
     document.getElementById('btn-process').disabled = false;
+    syncDownloadAudioButton();
     const loadJson = document.getElementById('btn-load-json');
     if (loadJson) loadJson.disabled = !!window.authToken;
     if (typeof syncJsonUploadVisibility === 'function') syncJsonUploadVisibility();
@@ -132,6 +138,7 @@ function clearFile() {
     const loadJson = document.getElementById('btn-load-json');
     if (loadJson) loadJson.disabled = true;
     document.getElementById('btn-save-json').disabled = true;
+    syncDownloadAudioButton();
     document.getElementById('btn-copy').disabled = true;
     if (typeof syncJsonUploadVisibility === 'function') syncJsonUploadVisibility();
 
@@ -161,6 +168,7 @@ async function uploadFile() {
             if (xhr.status === 200) {
                 const data = JSON.parse(xhr.responseText);
                 currentFileId = data.file_id;
+                syncDownloadAudioButton();
                 resolve(data);
             } else {
                 let msg = 'Upload thất bại';

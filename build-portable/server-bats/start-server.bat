@@ -22,7 +22,7 @@ set "PORT=8443"
 set "HTTP_MODE=0"
 set "PWA_ENABLED=1"
 set "PWA_PORT=8444"
-for /f "tokens=1,* delims==" %%A in ('"%PYTHON_EXE%" -c "import configparser, os; c=configparser.ConfigParser(); c.read(os.path.join(os.environ['BASE_DIR'], 'config.ini'), encoding='utf-8'); s=c['ServerSettings'] if c.has_section('ServerSettings') else {}; p=c['OfflinePWA'] if c.has_section('OfflinePWA') else {}; v=p.get('enabled','true').strip().lower(); print('HOST='+s.get('host','0.0.0.0')); print('PORT='+s.get('port','8443')); print('HTTP_MODE='+s.get('http_mode','0')); print('PWA_ENABLED='+('1' if v in ('1','true','yes','on') else '0')); print('PWA_PORT='+p.get('port','8444'))" 2^>nul') do set "%%A=%%B"
+for /f "tokens=1,* delims==" %%A in ('"%PYTHON_EXE%" -c "import configparser, os; p=os.path.join(os.environ['BASE_DIR'], 'config.ini'); p=p if os.path.exists(p) else p+'.example'; c=configparser.ConfigParser(); c.read(p, encoding='utf-8-sig'); s=c['ServerSettings'] if c.has_section('ServerSettings') else {}; pwa=c['OfflinePWA'] if c.has_section('OfflinePWA') else {}; v=pwa.get('enabled','true').strip().lower(); print('HOST='+s.get('host','0.0.0.0')); print('PORT='+s.get('port','8443')); print('HTTP_MODE='+s.get('http_mode','0')); print('PWA_ENABLED='+('1' if v in ('1','true','yes','on') else '0')); print('PWA_PORT='+pwa.get('port','8444'))" 2^>nul') do set "%%A=%%B"
 
 if "%HTTP_MODE%"=="1" (set "PROTO=http") else (set "PROTO=https")
 
