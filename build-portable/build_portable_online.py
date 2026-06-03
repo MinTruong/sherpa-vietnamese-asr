@@ -247,21 +247,52 @@ def copy_venv_packages_services():
     return True
 
 
+def _load_config_defaults(py_path: Path, class_name: str) -> dict:
+    """Read a class DEFAULTS dict without importing modules that create runtime files."""
+    source = py_path.read_text(encoding="utf-8")
+    module = ast.parse(source)
+    for node in module.body:
+        if not isinstance(node, ast.ClassDef) or node.name != class_name:
+            continue
+        for stmt in node.body:
+            if not isinstance(stmt, ast.Assign):
+                continue
+            names = [target.id for target in stmt.targets if isinstance(target, ast.Name)]
+            if "DEFAULTS" not in names or not isinstance(stmt.value, ast.Dict):
+                continue
+            defaults = {}
+            for key_node, value_node in zip(stmt.value.keys, stmt.value.values):
+                key = ast.literal_eval(key_node)
+                try:
+                    value = ast.literal_eval(value_node)
+                except ValueError:
+                    if class_name == "ServerConfig" and key == "cpu_threads":
+                        value = "4"
+                    else:
+                        raise RuntimeError(f"Unsupported dynamic default: {class_name}.{key}")
+                defaults[str(key)] = str(value)
+            return defaults
+    raise RuntimeError(f"{class_name}.DEFAULTS not found in {py_path}")
+
+
 def _write_config_example_online():
     """Ship config.ini.example only; runtime creates config.ini on first run."""
     import configparser
 
-    src = PROJECT_ROOT / "config.ini"
     dst = DIST_DIR_ONLINE / "config.ini.example"
     runtime_config = DIST_DIR_ONLINE / "config.ini"
     if runtime_config.exists():
         runtime_config.unlink()
 
-    if not src.exists():
-        raise RuntimeError("config.ini not found; cannot create config.ini.example")
-
     cfg = configparser.ConfigParser()
-    cfg.read(src, encoding="utf-8-sig")
+    cfg["ServerSettings"] = _load_config_defaults(
+        PROJECT_ROOT / "web_service" / "config.py",
+        "ServerConfig",
+    )
+    cfg["OfflinePWA"] = _load_config_defaults(
+        PROJECT_ROOT / "offline_pwa" / "config.py",
+        "OfflinePWAConfig",
+    )
 
     if not cfg.has_section("ServerSettings"):
         cfg.add_section("ServerSettings")
