@@ -17,6 +17,11 @@ python server_launcher.py --no-gui                 # Web headless (FastAPI)
 python server_launcher.py                          # Web admin GUI wrapper
 python server_gui.py                               # Web admin GUI (standalone PyQt6)
 
+# === CLI (created tool — run ASR from command line) ===
+python asr_cli.py input.mp3 --text-only            # Basic transcript
+python asr_cli.py input.mp3 --rover --text-only    # ROVER (2 models, best accuracy)
+python asr_cli.py input.mp3 --model 30M --no-diarization -v  # Lightweight + verbose
+
 # === Build portable (output: dist/) ===
 python build-portable/setup_build_env.py           # Step 1: setup virtualenv
 python build-portable/prepare_offline_build.py     # Step 2: download models
@@ -34,27 +39,37 @@ python service_installer.py install                # Install as Windows service
 python service_installer.py remove                 # Remove Windows service
 python service_installer.py start                  # Start service
 
+# === Install missing deps (common gotchas) ===
+pip install onnxruntime                            # Required for inference
+pip install kaldi-native-fbank                     # Required by sherpa-onnx for fbank extraction
+pip install websockets                             # Required by uvicorn WebSocket
+pip install cryptography                           # Required for SSL cert generation
+
 # === Sync to GitHub repo ===
 # Copy code từ d:\App\asr-vn → D:\App\sherpa-vietnamese-asr rồi push
 ```
 
-**Note:** There are no formal test suites in this project. Test/benchmark/experiment files go in `temp/` and are never committed.
+**Note:** There are no formal test suites in this project. Test/benchmark/experiment files go in `temp/` and are never committed. Audio datasets live in `dataset/raw_audio/`.
 
 ## Processing Pipeline
 
 Audio flows through these stages serially — every stage runs via ONNX Runtime (no PyTorch at inference):
 
 ```text
-Input file (MP3/WAV/...) → FFmpeg decode (16kHz mono SoXR) → [Overlap Separation] → VAD (Silero ONNX) → Chunking → ASR (Zipformer RNN-T ONNX) → [ROVER voting for 3-model mode] → Diarization → Punctuation (ViBERT-capu ONNX) → JSON output
+Input file (MP3/WAV/...) → FFmpeg decode (16kHz mono SoXR) → [Preprocess: RMS norm + WPE dereverb] → [Overlap Separation] → VAD (Silero ONNX) → Chunking → ASR (Zipformer RNN-T ONNX) → [ROVER voting for 3-model mode] → Diarization → Punctuation (ViBERT-capu ONNX) → [Grammar correction (GEC BERT ONNX)] → JSON output
 ```
 
+Preprocessing (RMS normalization, WPE dereverberation) and grammar correction are optional steps controlled by config flags.
+
 1. **Audio decode** (`core/audio_decode.py`) — FFmpeg + SoXR HQ/VHQ resampling → mono float32 PCM 16kHz
-2. **Overlap separation** (`core/overlap_separator.py`) — Conv-TasNet ONNX tách 2 người nói chồng lấn (diarization overlap regions → 2 clean audio streams → Hungarian match với CAM++ centroids để gán speaker)
-3. **VAD** (`core/vad_utils.py`) — Silero VAD ONNX (chung cho cả desktop ASR và audio_analyzer)
-4. **ASR** (`core/asr_engine.py`) — Zipformer RNN-T (30M hoặc 68M); chunk+overlap+ROVER voting
-5. **Diarization** (`core/speaker_diarization_*.py`) — Pyannote Community-1 (ResNet34+PLDA+VBx) hoặc Senko CAM++ (spectral/UMAP+HDBSCAN/clustering); dispatcher pattern
-6. **Punctuation** (`core/punctuation_restorer_improved.py`) — ViBERT-capu ONNX
-7. **JSON output** (`core/asr_json.py`) — segments với speaker labels, timestamps
+2. **Audio preprocessing** (`core/audio_preprocessing.py`) — Per-segment RMS normalization (adaptive, Google AGC-style), adaptive peak limiter, WPE dereverberation (per-chunk, optional)
+3. **Overlap separation** (`core/overlap_separator.py`) — Conv-TasNet ONNX tách 2 người nói chồng lấn
+4. **VAD** (`core/vad_utils.py`) — Silero VAD ONNX (chung cho cả desktop ASR và audio_analyzer)
+5. **ASR** (`core/asr_engine.py`) — Zipformer RNN-T (30M hoặc 68M); chunk+overlap+ROVER voting
+6. **Diarization** (`core/speaker_diarization_*.py`) — Pyannote Community-1 (ResNet34+PLDA+VBx) hoặc Senko CAM++ (spectral/UMAP+HDBSCAN/clustering); dispatcher pattern
+7. **Punctuation** (`core/punctuation_restorer_improved.py`) — ViBERT-capu ONNX, tích hợp grammar correction (GEC BERT ONNX) option
+8. **Grammar correction** (`core/gec_model.py`) — Seq2Labels ONNX model, sửa lỗi ngữ pháp sau punctuation
+9. **JSON output** (`core/asr_json.py`) — segments với speaker labels, timestamps
 
 ## Architecture
 
@@ -68,7 +83,12 @@ Input file (MP3/WAV/...) → FFmpeg decode (16kHz mono SoXR) → [Overlap Separa
 | `core/speaker_diarization_pure_ort.py` | Pyannote Community-1: ResNet34-LM embedding + PLDA scoring + VBx clustering, pure ONNX |
 | `core/speaker_diarization_senko_campp.py` | Senko CAM++ 192-dim: spectral/UMAP reduction + HDBSCAN clustering |
 | `core/speaker_diarization_senko_campp_optimized.py` | Senko optimized: batch inference, ~2.5x faster |
-| `core/punctuation_restorer_improved.py` | ViBERT-capu ONNX: dấu câu + viết hoa (desktop INT8, web FP32) |
+| `core/punctuation_restorer_improved.py` | ViBERT-capu ONNX: dấu câu + viết hoa (desktop INT8, web FP32), tích hợp GEC |
+| `core/gec_model.py` | Seq2Labels grammar error correction ONNX (wrapper, dùng transformers tokenizer) |
+| `core/gec_utils.py` | GEC utilities: verb form vocabulary, edit labels, sentence decoding |
+| `core/vocabulary.py` | AllenNLP-style vocabulary with namespaces, padding, OOV handling |
+| `core/audio_preprocessing.py` | RMS normalization + adaptive peak limiter + WPE dereverberation |
+| `core/utils.py` | Vietnamese text normalization (remove diacritics), fuzzy search |
 | `core/vad_utils.py` | Silero VAD ONNX session + prediction |
 | `core/overlap_separator.py` | Conv-TasNet ONNX 2-speaker separation |
 | `core/audio_decode.py` | FFmpeg/SoXR decode/resample canoncial (mono 16kHz float32) |
@@ -193,6 +213,34 @@ Single file `config.ini` (no `.example` in repo — auto-created if missing). Se
 - Giữ `.dist-info` cho: `pynndescent`, `umap_learn`, `hdbscan`, `numba`, `llvmlite`, `scikit_learn` (dùng `importlib.metadata`)
 - Strip `.opt` files (ORT JIT cache generated on target machine)
 - Models directory required: `campp-3dspeaker/`, `pyannote-onnx/` cho Senko
+
+## Common Gotchas & Fixes
+
+1. **Web server crashes at startup with `FOREIGN KEY constraint failed`** — `database.py:delete_session_files()` deletes `files` before `meetings`. Fix: add `DELETE FROM meetings WHERE file_id IN (SELECT id FROM files WHERE session_id = ?)` before `DELETE FROM files`.
+
+2. **`prepare_offline_build.py` fails for `zipformer-30m-rnnt-6000h` and `zipformer-30m-rnnt-streaming-6000h`** — HuggingFace repos lack `tokens.txt`. Fix: generate from `bpe.model` using sentencepiece:
+   ```python
+   import sentencepiece as spm
+   sp = spm.SentencePieceProcessor()
+   sp.Load("models/<model>/bpe.model")
+   with open("models/<model>/tokens.txt", "w") as f:
+       for i in range(sp.GetPieceSize()):
+           f.write(f"{sp.IdToPiece(i)} {i}\n")
+   ```
+
+3. **Pyannote gated repos** (`pyannote/speaker-diarization-community-1`, `pyannote/segmentation-3.0`) return 401 — not needed, the project uses pure ONNX alternatives (`altunenes_*`, `pyannote_split_encoder`). Skip these errors.
+
+4. **Web server WebSocket fails** — install `websockets`: `pip install websockets`
+
+5. **ASR pipeline can't find `kaldi_native_fbank`** — install separately: `pip install kaldi-native-fbank` (not listed in requirements.txt as a transitive dep of sherpa-onnx)
+
+6. **SSL cert generation fails** — install `cryptography`: `pip install cryptography`
+
+7. **ROVER mode** — use `rover_mode: True` in pipeline config. Do NOT manually loop over models — the engine internally loads multiple recognizers and combines results.
+
+8. **Diarization default (`pyannote`) fails** — gated model is missing. Use `senko_campp_optimized` as speaker_model instead, or disable diarization.
+
+9. **CLI tool `asr_cli.py`** — created at project root for running ASR without GUI. Supports `--model`, `--rover`, `--no-diarization`, `--text-only`, `--rms-normalize`.
 
 ## Data Flow Key Patterns
 

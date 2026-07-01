@@ -112,3 +112,6 @@ final_report.md
 # Web service runtime data, secrets, certificates, and uploads
 web_service/data/
 web_service/certs/
+
+# Datasets
+dataset/raw_data/*

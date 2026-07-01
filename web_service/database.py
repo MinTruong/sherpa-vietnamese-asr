@@ -486,6 +486,10 @@ class Database:
                 "SELECT stored_filename FROM files WHERE session_id = ?", (session_id,)
             ).fetchall()
             filenames = [r["stored_filename"] for r in rows]
+            conn.execute(
+                "DELETE FROM meetings WHERE file_id IN (SELECT id FROM files WHERE session_id = ?)",
+                (session_id,),
+            )
             conn.execute("DELETE FROM queue WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM files WHERE session_id = ?", (session_id,))
             return filenames
